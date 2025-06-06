@@ -1,0 +1,468 @@
+{% extends "base.html" %}
+
+{% block title %}Падение хлеба{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-10">
+            <div class="game-container crash-container card bg-dark text-white p-4">
+                <h2 class="text-center mb-4">🍞 Падение хлеба</h2>
+                
+                <!-- Игровое поле -->
+                <div class="crash-game">
+                    <div class="multiplier text-center mb-3">
+                        <h3 id="current-multiplier">1.00x</h3>
+                        <div id="game-status" class="text-warning">Ожидание игроков...</div>
+                    </div>
+
+                    <div class="graph-container position-relative bg-black rounded mb-3">
+                        <canvas id="crash-graph"></canvas>
+                         <div id="betting-timer" class="position-absolute top-50 start-50 translate-middle text-white fs-1" style="display: none;"></div>
+                    </div>
+
+                    <div class="history mb-3">
+                         <h5>История раундов:</h5>
+                        <div id="round-history" class="d-flex flex-wrap justify-content-center"></div>
+                    </div>
+                </div>
+
+                <!-- Панель управления -->
+                <div class="control-panel mt-4 card bg-secondary text-white p-3">
+                    <div class="row align-items-center">
+                        <div class="col-md-4">
+                            <div class="form-group mb-2">
+                                <label for="bet-amount" class="form-label">Сумма ставки</label>
+                                <input type="number" class="form-control bg-dark text-white border-secondary" id="bet-amount" min="1" value="10">
+                            </div>
+                        </div>
+                         <div class="col-md-4">
+                             <div class="form-group mb-2">
+                                <label for="auto-cashout" class="form-label">Авто-кэшаут (x)</label>
+                                <input type="number" class="form-control bg-dark text-white border-secondary" id="auto-cashout" min="1.01" value="2.00" step="0.01">
+                            </div>
+                         </div>
+                        <div class="col-md-4">
+                            <button class="btn btn-primary w-100 mb-2" id="place-bet-button">Сделать ставку</button>
+                            <button class="btn btn-danger w-100 mb-2" id="cashout-button" style="display: none;">Забрать выигрыш</button>
+                        </div>
+                    </div>
+                     <div id="user-bet-status" class="mt-2 text-center"></div>
+                     <div id="betting-players-count" class="mt-2 text-center text-info">Игроков поставило: 0</div>
+                </div>
+
+                <!-- Результаты -->
+                <div class="results mt-4" id="round-results" style="display: none;">
+                     <h5>Результаты раунда:</h5>
+                     <div id="round-crash-point" class="alert alert-danger text-center"></div>
+                     <div id="user-round-result" class="alert text-center"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script>
+const socket = io();
+const multiplierElement = document.getElementById('current-multiplier');
+const gameStatusElement = document.getElementById('game-status');
+const graphContainer = document.querySelector('.graph-container');
+const canvas = document.getElementById('crash-graph');
+const ctx = canvas.getContext('2d');
+const betAmountInput = document.getElementById('bet-amount');
+const autoCashoutInput = document.getElementById('auto-cashout');
+const placeBetButton = document.getElementById('place-bet-button');
+const cashoutButton = document.getElementById('cashout-button');
+const roundResultsDiv = document.getElementById('round-results');
+const roundCrashPointDiv = document.getElementById('round-crash-point');
+const userRoundResultDiv = document.getElementById('user-round-result');
+const roundHistoryDiv = document.getElementById('round-history');
+const bettingTimerDiv = document.getElementById('betting-timer');
+const userBetStatusDiv = document.getElementById('user-bet-status');
+const bettingPlayersCountDiv = document.getElementById('betting-players-count');
+
+let game_state = 'waiting';
+let multiplier_history = [];
+let userPlacedBet = false;
+let userCashedOut = false;
+let animationFrame = null;
+
+// Get user ID from Flask session using Jinja2
+const currentUserId = {{ session.get('user_id', -1) }};
+
+// Adjust canvas size on window resize and initially
+function resizeCanvas() {
+    canvas.width = graphContainer.clientWidth;
+    canvas.height = graphContainer.clientHeight;
+    if (game_state === 'running') {
+        drawGraph(); // Redraw graph if game is running
+    }
+}
+
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas(); // Initial size setting
+
+// Draw the crash graph
+function drawGraph() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (multiplier_history.length < 2) return;
+
+    const maxMultiplier = Math.max(...multiplier_history);
+    const minMultiplier = 1.00;
+    const range = maxMultiplier - minMultiplier;
+    const padding = 20; // Padding around the graph
+
+    // Draw Axes (optional, but good for context)
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 1;
+
+    // Y-axis (Multiplier)
+    ctx.beginPath();
+    ctx.moveTo(padding, 0);
+    ctx.lineTo(padding, canvas.height - padding);
+    ctx.stroke();
+
+    // X-axis (Time/Points)
+    ctx.beginPath();
+    ctx.moveTo(padding, canvas.height - padding);
+    ctx.lineTo(canvas.width, canvas.height - padding);
+    ctx.stroke();
+
+    // Draw multiplier line
+    ctx.beginPath();
+    ctx.moveTo(padding, canvas.height - padding); // Start at 1x on Y-axis
+
+    const x_scale = (canvas.width - padding) / (multiplier_history.length - 1);
+    // Dynamic y_scale based on max multiplier, ensuring 1x is at the bottom
+    const y_scale = (canvas.height - 2 * padding) / range;
+
+    multiplier_history.forEach((multiplier, index) => {
+        const x = padding + index * x_scale;
+        // Map multiplier value to y-coordinate, inverting for canvas
+        const y = canvas.height - padding - (multiplier - minMultiplier) * y_scale;
+        ctx.lineTo(x, y);
+    });
+
+    ctx.strokeStyle = '#28a745'; // Green line for running
+    if (game_state === 'crashed') {
+        ctx.strokeStyle = '#dc3545'; // Red line if crashed
+    }
+
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Draw current multiplier text
+    if (multiplier_history.length > 0) {
+        const lastMultiplier = multiplier_history[multiplier_history.length - 1];
+        const lastX = padding + (multiplier_history.length - 1) * x_scale;
+        const lastY = canvas.height - padding - (lastMultiplier - minMultiplier) * y_scale;
+
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.font = 'bold 18px Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        // Position text slightly above the last point
+        ctx.fillText(lastMultiplier.toFixed(2) + 'x', lastX + 5, lastY - 5);
+    }
+}
+
+// Update UI based on game state
+function updateUI(state) {
+    game_state = state.game_state;
+    // Find UI elements
+    const placeBetButton = document.getElementById('place-bet-button');
+    const userBetStatusDiv = document.getElementById('user-bet-status');
+    const bettingPlayersCountDiv = document.getElementById('betting-players-count');
+    const cashoutButton = document.getElementById('cashout-button');
+    const roundResultsDiv = document.getElementById('round-results');
+    const multiplierElement = document.getElementById('current-multiplier');
+    const gameStatusElement = document.getElementById('game-status');
+    const bettingTimerDiv = document.getElementById('betting-timer'); // Ensure bettingTimerDiv is found
+
+    // Update main game status display
+    gameStatusElement.textContent = {
+        'waiting': 'Ожидание следующего раунда...',
+        'betting': `Ставки: ${state.betting_time_left !== undefined ? state.betting_time_left.toFixed(1) : '--'} сек`,
+        'running': 'Игра идет...',
+        'crashed': `Крах на ${state.crash_point !== undefined ? state.crash_point.toFixed(2) : '--'}x`,
+    }[game_state] || 'Неизвестное состояние';
+
+    // Update betting players count
+    bettingPlayersCountDiv.textContent = `Игроков поставило: ${state.players_betting !== undefined ? state.players_betting : 0}`;
+
+    // Control button visibility and state message based on game_state and user status
+    if (game_state === 'betting') {
+        placeBetButton.style.display = 'block';
+        cashoutButton.style.display = 'none';
+        bettingTimerDiv.style.display = 'block'; // Show betting timer
+        roundResultsDiv.style.display = 'none';
+
+        if (!userPlacedBet) {
+             // User has not placed a bet yet in this round
+             placeBetButton.disabled = false;
+             userBetStatusDiv.textContent = 'Сделайте вашу ставку!'; // Message prompting to bet
+         } else {
+             // User has already placed a bet in this round
+             placeBetButton.disabled = true;
+             userBetStatusDiv.textContent = 'Ваша ставка принята. Ожидание раунда...'; // Message after placing bet
+         }
+
+        multiplierElement.textContent = '1.00x'; // Reset multiplier display
+        multiplier_history = []; // Clear history for new round
+        // Betting timer display is updated by the game_state message itself
+
+         userCashedOut = false; // Reset cashout status for new round
+         resizeCanvas(); // Reset graph view
+
+    } else if (game_state === 'running') {
+        // Hide bet button, show cashout button if user has a bet
+        placeBetButton.style.display = 'none';
+        bettingTimerDiv.style.display = 'none';
+        roundResultsDiv.style.display = 'none';
+        userBetStatusDiv.textContent = 'Игра идет.'; // Status while game is running
+
+        if (userPlacedBet && !userCashedOut) {
+             cashoutButton.style.display = 'block';
+             cashoutButton.disabled = false;
+         } else {
+             cashoutButton.style.display = 'none'; // Hide if no bet or already cashed out
+         }
+
+    } else if (game_state === 'crashed') {
+        // Show bet button for next round, hide cashout, display results handled by round_result
+        placeBetButton.style.display = 'block';
+        placeBetButton.disabled = false; // Enable bet button for the next round
+        cashoutButton.style.display = 'none';
+        bettingTimerDiv.style.display = 'none';
+        userBetStatusDiv.textContent = 'Раунд завершен.'; // Update status
+        userPlacedBet = false; // Reset for next round
+        userCashedOut = false; // Reset for next round
+
+    } else if (game_state === 'waiting') {
+         // Hide bet button, hide cashout, display waiting message
+         placeBetButton.style.display = 'block'; // Keep block for layout, but disable
+         placeBetButton.disabled = true; // Disable bet button while waiting
+         cashoutButton.style.display = 'none';
+         bettingTimerDiv.style.display = 'none';
+         userBetStatusDiv.textContent = 'Ожидание следующего раунда...'; // Update status
+
+         multiplierElement.textContent = '1.00x'; // Reset multiplier display
+         multiplier_history = []; // Clear history
+         resizeCanvas(); // Reset graph view
+
+         userPlacedBet = false; // Ensure reset on waiting
+         userCashedOut = false; // Ensure reset on waiting
+    }
+}
+
+// --- SocketIO Event Handlers ---
+
+socket.on('connect', () => {
+    console.log('Connected to server');
+});
+
+socket.on('disconnect', () => {
+    console.log('Disconnected from server');
+    game_state = 'waiting';
+    updateUI({ game_state: 'waiting', players_betting: 0 });
+    multiplier_history = [];
+    resizeCanvas();
+    userBetStatusDiv.textContent = 'Соединение потеряно.';
+});
+
+socket.on('game_state', (state) => {
+    console.log('Game state update:', state);
+    updateUI(state);
+});
+
+socket.on('multiplier_update', (data) => {
+    console.log('Multiplier update:', data);
+    if (data.game_state === 'running') {
+        multiplier_history.push(data.multiplier);
+        multiplierElement.textContent = data.multiplier.toFixed(2) + 'x';
+        drawGraph();
+    }
+});
+
+socket.on('user_cashout', (data) => {
+    console.log('User cashout:', data);
+    if (data.user_id === currentUserId) {
+        userCashedOut = true;
+        userBetStatusDiv.textContent = data.message;
+        cashoutButton.style.display = 'none';
+    }
+});
+
+socket.on('round_result', (data) => {
+    console.log('Round result:', data);
+    roundResultsDiv.style.display = 'block';
+    roundCrashPointDiv.textContent = `Крах на ${data.crash_point.toFixed(2)}x`;
+    
+    addRoundToHistory(data.crash_point);
+    
+    if (data.results && data.results[currentUserId]) {
+        const result = data.results[currentUserId];
+        if (result.win) {
+            userRoundResultDiv.className = 'alert alert-success';
+            userRoundResultDiv.textContent = `Вы забрали выигрыш на ${result.cashout_multiplier.toFixed(2)}x. Выигрыш: ${result.win_amount}₽`;
+        } else {
+            userRoundResultDiv.className = 'alert alert-danger';
+            userRoundResultDiv.textContent = 'Вы проиграли';
+        }
+        userRoundResultDiv.style.display = 'block';
+    } else {
+         userRoundResultDiv.style.display = 'none';
+    }
+    
+    userPlacedBet = false;
+    userCashedOut = false;
+});
+
+socket.on('balance_update', (data) => {
+    console.log('Balance Update:', data);
+    if (typeof updateBalance === 'function') {
+        updateBalance(data.balance);
+    } else {
+        console.error('updateBalance function not found');
+        const balanceElement = document.querySelector('.balance');
+        if (balanceElement) {
+            balanceElement.textContent = data.balance;
+        }
+    }
+});
+
+socket.on('error', (data) => {
+    console.error('Server Error:', data.message);
+    alert('Ошибка: ' + data.message);
+    userBetStatusDiv.textContent = 'Ошибка: ' + data.message;
+});
+
+// --- Button Event Listeners ---
+
+placeBetButton.addEventListener('click', () => {
+    console.log('Place bet button clicked.');
+    if (game_state !== 'betting') {
+        alert('Можно ставить только во время фазы ставок.');
+        userBetStatusDiv.textContent = 'Сейчас нельзя делать ставки.';
+        console.log('Bet rejected: Not in betting phase.');
+        return;
+    }
+
+    const betAmount = parseInt(betAmountInput.value);
+    const autoCashout = parseFloat(autoCashoutInput.value);
+
+    if (isNaN(betAmount) || betAmount < 1) {
+        alert('Введите корректную сумму ставки');
+        userBetStatusDiv.textContent = 'Неверная сумма ставки.';
+        console.log('Invalid bet amount:', betAmount);
+        return;
+    }
+
+    if (isNaN(autoCashout) || autoCashout < 1.01) {
+        alert('Введите корректный авто-кэшаут (минимум 1.01)');
+        userBetStatusDiv.textContent = 'Неверное значение авто-кэшаута (минимум 1.01).';
+        console.log('Invalid auto cashout:', autoCashout);
+        return;
+    }
+
+    console.log('Attempting to emit place_bet event with data:', { bet_amount: betAmount, auto_cashout: autoCashout });
+    socket.emit('place_bet', {
+        bet_amount: betAmount,
+        auto_cashout: autoCashout
+    });
+    console.log('place_bet event should now be emitted.');
+});
+
+cashoutButton.addEventListener('click', () => {
+    console.log('Cashout button clicked.');
+    if (game_state !== 'running' || !userPlacedBet || userCashedOut) {
+         alert('Нельзя забрать выигрыш сейчас.');
+         userBetStatusDiv.textContent = 'Сейчас нельзя забрать выигрыш.';
+         console.log('Cashout rejected: Not running, no bet, or already cashed out.');
+         return;
+     }
+
+    socket.emit('cashout');
+    console.log('cashout event emitted.');
+});
+
+// Handle bet placement response
+socket.on('bet_response', (data) => {
+    console.log('Received bet_response:', data);
+    if (data.success) {
+        userPlacedBet = true;
+        placeBetButton.style.display = 'none';
+        cashoutButton.style.display = 'block';
+        cashoutButton.disabled = false;
+        userBetStatusDiv.textContent = data.message;
+    } else {
+        alert(data.message);
+    }
+});
+
+// --- Graph Drawing and Animation ---
+
+// The multiplier_update handler now pushes data and calls drawGraph
+
+// --- History Display ---
+
+function addRoundToHistory(crashPoint) {
+    const span = document.createElement('span');
+    span.className = 'badge me-1 mb-1';
+    span.textContent = `${crashPoint.toFixed(2)}x`;
+
+    if (crashPoint < 2.00) {
+        span.classList.add('bg-danger');
+    } else if (crashPoint < 10.00) {
+         span.classList.add('bg-warning');
+    } else {
+         span.classList.add('bg-success');
+    }
+
+    if (roundHistoryDiv.firstChild) {
+        roundHistoryDiv.insertBefore(span, roundHistoryDiv.firstChild);
+    } else {
+        roundHistoryDiv.appendChild(span);
+    }
+
+    while (roundHistoryDiv.children.length > 20) {
+        roundHistoryDiv.removeChild(roundHistoryDiv.lastChild);
+    }
+}
+
+// --- Betting Timer Update ---
+
+socket.on('game_state', (state) => {
+    console.log('Game State Update:', state);
+    updateUI(state);
+    if (state.game_state === 'betting' && state.betting_time_left !== undefined) {
+        bettingTimerDiv.style.display = 'block';
+        bettingTimerDiv.textContent = state.betting_time_left;
+
+        placeBetButton.disabled = false;
+         cashoutButton.disabled = false;
+
+    } else {
+        bettingTimerDiv.style.display = 'none';
+    }
+
+     if (state.game_state === 'running' && userPlacedBet && !userCashedOut) {
+         placeBetButton.style.display = 'none';
+         cashoutButton.style.display = 'block';
+         cashoutButton.disabled = false;
+
+     } else if (state.game_state !== 'running') {
+         cashoutButton.style.display = 'none';
+     }
+
+});
+
+// Initial canvas sizing
+resizeCanvas();
+
+</script>
+{% endblock %} 

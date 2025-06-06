@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2 class="text-light mb-4">Управление пользователями</h2>
+    
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+    
+    <div class="table-responsive">
+        <table class="table table-dark table-striped">
+            <thead>
+                <tr>
+                    <th class="text-light">ID</th>
+                    <th class="text-light">Имя пользователя</th>
+                    <th class="text-light">Баланс</th>
+                    <th class="text-light">Админ</th>
+                    <th class="text-light">Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td class="text-light">{{ user.id }}</td>
+                    <td class="text-light">{{ user.username }}</td>
+                    <td class="text-light">{{ user.balance }}</td>
+                    <td class="text-light">{{ "Да" if user.is_admin else "Нет" }}</td>
+                    <td>
+                        <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#balanceModal{{ user.id }}">
+                            Изменить баланс
+                        </button>
+                    </td>
+                </tr>
+                
+                <!-- Modal для изменения баланса -->
+                <div class="modal fade" id="balanceModal{{ user.id }}" tabindex="-1" aria-labelledby="balanceModalLabel{{ user.id }}" aria-hidden="true">
+                    <div class="modal-dialog">
+                        <div class="modal-content bg-dark text-light">
+                            <div class="modal-header border-secondary">
+                                <h5 class="modal-title" id="balanceModalLabel{{ user.id }}">Изменение баланса пользователя {{ user.username }}</h5>
+                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <form action="{{ url_for('update_user_balance', user_id=user.id) }}" method="POST">
+                                <div class="modal-body">
+                                    <div class="mb-3">
+                                        <label for="amount{{ user.id }}" class="form-label">Сумма</label>
+                                        <input type="number" step="0.01" class="form-control bg-dark text-light border-secondary" id="amount{{ user.id }}" name="amount" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="action" id="add{{ user.id }}" value="add" checked>
+                                            <label class="form-check-label" for="add{{ user.id }}">
+                                                Добавить
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="action" id="subtract{{ user.id }}" value="subtract">
+                                            <label class="form-check-label" for="subtract{{ user.id }}">
+                                                Вычесть
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="modal-footer border-secondary">
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %} 

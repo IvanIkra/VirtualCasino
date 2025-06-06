@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Главная{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <!-- Логотип и название -->
+    <div class="text-center mb-5">
+        <h1 class="casino-title">Ставка Судьбы Онлайн</h1>
+        <p class="casino-subtitle">Испытай удачу в лучших азартных играх</p>
+    </div>
+
+    <!-- Игры -->
+    <div class="row g-4">
+        <!-- Слоты -->
+        <div class="col-md-6 col-lg-3">
+            <div class="game-card" data-game="slots">
+                <div class="game-icon">🎰</div>
+                <h3>Слоты</h3>
+                <p>Классические игровые автоматы с множеством выигрышных комбинаций</p>
+                <div class="game-features">
+                    <span>🎲 Случайность</span>
+                    <span>💰 Высокие выплаты</span>
+                </div>
+                <button class="btn btn-play" onclick="location.href='{{ url_for('slots') }}'">Играть</button>
+            </div>
+        </div>
+
+        <!-- Рулетка -->
+        <div class="col-md-6 col-lg-3">
+            <div class="game-card" data-game="roulette">
+                <div class="game-icon">🎡</div>
+                <h3>Рулетка</h3>
+                <p>Королева казино с множеством вариантов ставок</p>
+                <div class="game-features">
+                    <span>🎯 Точность</span>
+                    <span>💎 Престиж</span>
+                </div>
+                <button class="btn btn-play" onclick="location.href='{{ url_for('roulette') }}'">Играть</button>
+            </div>
+        </div>
+
+        <!-- Падение хлеба -->
+        <div class="col-md-6 col-lg-3">
+            <div class="game-card" data-game="crash">
+                <div class="game-icon">🍞</div>
+                <h3>Падение хлеба</h3>
+                <p>Успей забрать выигрыш до краша</p>
+                <div class="game-features">
+                    <span>⚡ Момент</span>
+                    <span>📈 Множитель</span>
+                </div>
+                <button class="btn btn-play" onclick="location.href='{{ url_for('crash') }}'">Играть</button>
+            </div>
+        </div>
+
+        <!-- Сапер -->
+        <div class="col-md-6 col-lg-3">
+            <div class="game-card" data-game="mines">
+                <div class="game-icon">💣</div>
+                <h3>Сапер</h3>
+                <p>Найди сокровища, избегая мин</p>
+                <div class="game-features">
+                    <span>🤔 Логика</span>
+                    <span>💰 Риск</span>
+                </div>
+                <button class="btn btn-play" onclick="location.href='{{ url_for('mines') }}'">Играть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Информация о казино -->
+    <div class="casino-info mt-5">
+        <div class="row">
+            <div class="col-md-4">
+                <div class="info-card">
+                    <h4>🎲 Честная игра</h4>
+                    <p>Все игры используют проверенные алгоритмы случайности</p>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="info-card">
+                    <h4>💰 Быстрые выплаты</h4>
+                    <p>Мгновенное зачисление выигрышей на ваш счет</p>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="info-card">
+                    <h4>🛡️ Безопасность</h4>
+                    <p>Ваши данные и средства под надежной защитой</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %} 

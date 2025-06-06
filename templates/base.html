@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Виртуальное Казино{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block extra_css %}{% endblock %}
+    {% block head %}{% endblock %}
+</head>
+<body class="bg-dark text-light">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-black">
+        <div class="container">
+            <a class="navbar-brand" href="{{ url_for('index') }}">🎰 Виртуальное Казино</a>
+            <div class="ms-auto d-flex align-items-center">
+                {% if session.get('user_id') %}
+                <div class="d-flex align-items-center">
+                    <button class="btn btn-success me-3" data-bs-toggle="modal" data-bs-target="#depositModal">
+                        <i class="fas fa-plus-circle"></i> Пополнить
+                    </button>
+                    <span class="balance me-3">Баланс: <span class="balance-amount">{{ "%.2f"|format(current_user.balance if current_user else 0) }}</span>₽</span>
+                    <div class="dropdown">
+                        <button class="btn btn-dark dropdown-toggle" type="button" id="userMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                            {{ current_user.username }}
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="userMenu">
+                            <li><a class="dropdown-item text-light" href="{{ url_for('profile') }}">Профиль</a></li>
+                            {% if current_user.is_admin %}
+                            <li><a class="dropdown-item text-light" href="{{ url_for('admin_index') }}">Админ панель</a></li>
+                            {% endif %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item text-light" href="{{ url_for('logout') }}">Выйти</a></li>
+                        </ul>
+                    </div>
+                </div>
+                {% else %}
+                <div class="dropdown">
+                    <button class="btn btn-dark dropdown-toggle" type="button" id="authMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                        Войти
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="authMenu">
+                        <li><a class="dropdown-item text-light" href="{{ url_for('login') }}">Войти</a></li>
+                        <li><a class="dropdown-item text-light" href="{{ url_for('register') }}">Регистрация</a></li>
+                    </ul>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <!-- Deposit Modal -->
+    <div class="modal fade" id="depositModal" tabindex="-1" aria-labelledby="depositModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content bg-dark text-light">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="depositModalLabel">Пополнение баланса</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <button class="btn btn-primary w-100" id="watchAdButton">
+                            <i class="fas fa-play-circle"></i> Смотреть рекламу (+1000₽)
+                        </button>
+                    </div>
+                    <div id="adPlayer" class="d-none">
+                        <video id="adVideo" class="w-100" controls>
+                            <source id="videoSource" src="" type="video/mp4">
+                            Ваш браузер не поддерживает видео.
+                        </video>
+                        <div id="videoError" class="alert alert-danger mt-2 d-none">
+                            Ошибка загрузки видео. Пожалуйста, попробуйте позже.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mt-4">
+    {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const watchAdButton = document.getElementById('watchAdButton');
+            const adPlayer = document.getElementById('adPlayer');
+            const adVideo = document.getElementById('adVideo');
+            const videoSource = document.getElementById('videoSource');
+            const depositModal = document.getElementById('depositModal');
+            const videoError = document.getElementById('videoError');
+            
+            // Function to load random video
+            function loadRandomVideo() {
+                fetch('/get_random_ad')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            videoSource.src = data.video_url;
+                            adVideo.load(); // Reload the video element with new source
+                        } else {
+                            console.error('Failed to get random ad:', data.message);
+                            videoError.classList.remove('d-none');
+                            videoError.textContent = data.message;
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error loading random ad:', error);
+                        videoError.classList.remove('d-none');
+                        videoError.textContent = 'Ошибка загрузки видео';
+                    });
+            }
+            
+            // Load random video when modal is opened
+            depositModal.addEventListener('show.bs.modal', function () {
+                loadRandomVideo();
+            });
+            
+            if (watchAdButton) {
+                watchAdButton.addEventListener('click', function() {
+                    watchAdButton.classList.add('d-none');
+                    adPlayer.classList.remove('d-none');
+                    videoError.classList.add('d-none');
+                    
+                    // Add error handling for video loading
+                    adVideo.onerror = function() {
+                        console.error('Error loading video');
+                        videoError.classList.remove('d-none');
+                        watchAdButton.classList.remove('d-none');
+                        adPlayer.classList.add('d-none');
+                    };
+                    
+                    // Try to play the video
+                    const playPromise = adVideo.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(error => {
+                            console.error('Error playing video:', error);
+                            videoError.classList.remove('d-none');
+                            watchAdButton.classList.remove('d-none');
+                            adPlayer.classList.add('d-none');
+                        });
+                    }
+                });
+            }
+
+            if (adVideo) {
+                adVideo.addEventListener('ended', function() {
+                    // Send request to server to add balance
+                    fetch('/deposit/ad', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            // Update balance display
+                            const balanceAmount = document.querySelector('.balance-amount');
+                            if (balanceAmount) {
+                                balanceAmount.textContent = data.balance.toFixed(2);
+                            }
+                            // Close modal
+                            const modal = bootstrap.Modal.getInstance(depositModal);
+                            if (modal) {
+                                modal.hide();
+                            }
+                            // Reset video and button
+                            adVideo.currentTime = 0;
+                            adPlayer.classList.add('d-none');
+                            watchAdButton.classList.remove('d-none');
+                            videoError.classList.add('d-none');
+                        } else {
+                            alert(data.message || 'Произошла ошибка при пополнении баланса');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('Произошла ошибка при пополнении баланса');
+                    });
+                });
+            }
+        });
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html> 

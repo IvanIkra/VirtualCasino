@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Редактировать {{ config.game_type | capitalize }} конфигурацию{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <h2 class="mb-4">Редактировать {{ config.game_type | capitalize }} конфигурацию</h2>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <form method="POST">
+        <div class="form-group">
+            <label for="config_data">Конфигурационные данные (JSON)</label>
+            <textarea class="form-control" id="config_data" name="config_data" rows="15">{{ config.config_data }}</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary mt-3">Сохранить изменения</button>
+        <a href="{{ url_for('admin_index') }}" class="btn btn-secondary mt-3">Отмена</a>
+    </form>
+
+</div>
+{% endblock %} 
