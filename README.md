@@ -6,11 +6,11 @@ Welcome to the Online Casino Platform project! This is a web-based application b
 
 *   **User Accounts:** Secure user registration, login, and profile management.
 *   **Balance Management:** Users can view and manage their balance, including deposits via advertising.
-*   **Diverse Games:** Play popular casino games like Crash and Mines.
+*   **Diverse Games:** Play popular casino games like Crash and Mines, Slots and Roulette.
 *   **Game Logic:** Robust server-side game logic ensuring fair play.
 *   **Real-time Updates:** Seamless gameplay experience with real-time updates using Socket.IO.
 *   **Transaction History:** Detailed history of all user transactions (bets, wins, deposits).
-*   **Admin Panel:** Administrative interface for managing users and potentially game configurations.
+*   **Admin Panel:** Administrative interface for managing users and game configurations.
 
 This platform is designed to be a foundation for a feature-rich online casino experience.
 
@@ -38,34 +38,65 @@ python app.py
 
 ```
 casino/
-├── app.py              # Main application file
+├── app.py              # Main application file, Flask routes, Socket.IO handlers
+├── models.py           # Database models (User, Transaction, GameConfig)
+├── requirements.txt    # Project dependencies
+├── config/
+│   └── slots_config.py # Example game configuration
+├── games/
+│   ├── __init__.py     # Initializes game modules
+│   ├── base.py         # Base class for games
+│   ├── crash.py        # Crash game logic
+│   ├── mines.py        # Mines game logic
+│   ├── roulette.py     # Roulette game logic
+│   └── slots.py        # Slots game logic
 ├── static/
-│   └── css/
-│       └── style.css   # Styles
+│   ├── ad/             # Advertisement video files
+│   ├── css/            # CSS files
+│   └── js/             # JavaScript files
 └── templates/
     ├── base.html       # Base template
-    ├── index.html      # Main page
-    └── login.html      # Login page
+    ├── index.html      # Main page with game links
+    ├── login.html        # Login page
+    ├── register.html     # Registration page
+    ├── profile.html      # User profile page
+    ├── admin/          # Admin panel templates
+    │   ├── index.html
+    │   └── users.html
+    └── games/          # Game templates
+        ├── crash.html
+        ├── mines.html
+        ├── roulette.html
+        └── slots.html
 ```
 
 ## Games
 
+### Crash
+- A multiplier increases until it crashes.
+- Players bet and try to cash out before the crash.
+
+### Mines
+- Players choose a bet amount and the number of mines.
+- Click cells to reveal multipliers, avoiding mines.
+- Players can cash out at any time for accumulated winnings.
+
 ### Slots
-- 3x3 grid with 6 different symbols
-- Winning combinations on horizontal, vertical, and diagonal lines
-- Payout multipliers from x2 to x20
+- 3x3 grid with various symbols.
+- Winning combinations on horizontal, vertical, and diagonal lines.
+- Configurable payout multipliers.
 
 ### Roulette
-- Bet on numbers (x35)
-- Bet on colors (x2)
-- Bet on even/odd (x2)
-- Realistic number colors (red/black/green)
+- Classic roulette with bets on numbers, colors, even/odd.
+- Configurable payouts.
 
 ## Technologies Used
 
 - Python 3.x
 - Flask
+- Flask-SQLAlchemy
+- Flask-SocketIO
+- Socket.IO (Client-side JavaScript library)
 - Bootstrap 5
 - JavaScript
-- HTML5/CSS3 # VirtualCasino
-# VirtualCasino
+- HTML5/CSS3
