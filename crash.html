@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Падение хлеба</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+    .graph-container {
+        height: 300px;
+    }
+    #crash-graph {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+    </style>
+</head>
+<body class="bg-dark text-light" data-auth="user">
+<div class="container mt-4">
+    <div id="flash-area"></div>
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-10">
+                <div class="game-container crash-container card bg-dark text-white p-4">
+                    <h2 class="text-center mb-4">🍞 Падение хлеба</h2>
+
+                    <!-- Игровое поле -->
+                    <div class="crash-game">
+                        <div class="multiplier text-center mb-3">
+                            <h3 id="current-multiplier">1.00x</h3>
+                            <div id="game-status" class="text-warning fs-5">Ожидание игроков...</div>
+                        </div>
+
+                        <div class="graph-container position-relative bg-black rounded mb-3">
+                            <canvas id="crash-graph"></canvas>
+                            <div id="betting-timer" class="position-absolute top-50 start-50 translate-middle text-white fs-1" style="display: none;"></div>
+                        </div>
+
+                        <div class="history mb-3">
+                            <h5>История раундов:</h5>
+                            <div id="round-history" class="d-flex flex-wrap justify-content-center"></div>
+                        </div>
+                    </div>
+
+                    <!-- Панель управления -->
+                    <div class="control-panel mt-4 card bg-secondary text-white p-3">
+                        <div class="row align-items-center">
+                            <div class="col-md-4">
+                                <div class="form-group mb-2">
+                                    <label for="bet-amount" class="form-label">Сумма ставки</label>
+                                    <input type="number" class="form-control bg-dark text-white border-secondary" id="bet-amount" min="1" value="10">
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-group mb-2">
+                                    <label for="auto-cashout" class="form-label">Авто-кэшаут (x), можно оставить пустым</label>
+                                    <input type="number" class="form-control bg-dark text-white border-secondary" id="auto-cashout" min="1.01" value="2.00" step="0.01">
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <button class="btn btn-primary w-100 mb-2" id="place-bet-button">Сделать ставку</button>
+                                <button class="btn btn-danger w-100 mb-2" id="cashout-button" style="display: none;">Забрать выигрыш</button>
+                            </div>
+                        </div>
+                        <div id="user-bet-status" class="mt-2 text-center"></div>
+                    </div>
+
+                    <!-- Результаты -->
+                    <div class="results mt-4" id="round-results" style="display: none;">
+                        <h5>Результаты раунда:</h5>
+                        <div id="round-crash-point" class="alert alert-danger text-center"></div>
+                        <div id="user-round-result" class="alert text-center"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="js/store.js"></script>
+<script src="js/layout.js"></script>
+<script>
+Casino.ready(() => {
+// Параметры раунда (как в games/crash.py)
+const BETTING_PHASE_MS = 10000;
+const WAIT_BETWEEN_ROUNDS_MS = 5000;
+const UPDATE_INTERVAL_MS = 50;
+const GROWTH_RATE = 0.1; // множитель = 2^(секунды * GROWTH_RATE)
+
+const multiplierElement = document.getElementById('current-multiplier');
+const gameStatusElement = document.getElementById('game-status');
+const graphContainer = document.querySelector('.graph-container');
+const canvas = document.getElementById('crash-graph');
+const ctx = canvas.getContext('2d');
+const betAmountInput = document.getElementById('bet-amount');
+const autoCashoutInput = document.getElementById('auto-cashout');
+const placeBetButton = document.getElementById('place-bet-button');
+const cashoutButton = document.getElementById('cashout-button');
+const roundResultsDiv = document.getElementById('round-results');
+const roundCrashPointDiv = document.getElementById('round-crash-point');
+const userRoundResultDiv = document.getElementById('user-round-result');
+const roundHistoryDiv = document.getElementById('round-history');
+const bettingTimerDiv = document.getElementById('betting-timer');
+const userBetStatusDiv = document.getElementById('user-bet-status');
+
+let gameState = 'waiting'; // waiting, betting, running, crashed
+let crashPoint = null;
+let currentMultiplier = 1.0;
+let multiplierHistory = [];
+let phaseEndsAt = 0;
+let startTime = 0;
+let timer = null;
+let bet = null; // { amount, autoCashout, cashoutMultiplier, winAmount }
+
+// Генерирует точку краша так, что P(crash <= x) ≈ 1 - 1/x
+function calculateCrashPoint() {
+    while (true) {
+        const randomValue = 0.05 + Math.random() * 0.95;
+        const crash = 1 / (1 - randomValue);
+        if (crash >= 1.01) {
+            return Math.round(Math.min(crash, 200.0) * 100) / 100;
+        }
+    }
+}
+
+// --- Отрисовка ---
+
+function resizeCanvas() {
+    canvas.width = graphContainer.clientWidth;
+    canvas.height = graphContainer.clientHeight;
+    drawGraph();
+}
+
+function drawGraph() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (multiplierHistory.length < 2) return;
+
+    const maxMultiplier = Math.max(...multiplierHistory, 1.1);
+    const minMultiplier = 1.00;
+    const range = maxMultiplier - minMultiplier;
+    const padding = 20;
+
+    // Оси
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padding, 0);
+    ctx.lineTo(padding, canvas.height - padding);
+    ctx.lineTo(canvas.width, canvas.height - padding);
+    ctx.stroke();
+
+    const xScale = (canvas.width - padding - 70) / (multiplierHistory.length - 1);
+    const yScale = (canvas.height - 2 * padding) / range;
+
+    ctx.beginPath();
+    multiplierHistory.forEach((multiplier, index) => {
+        const x = padding + index * xScale;
+        const y = canvas.height - padding - (multiplier - minMultiplier) * yScale;
+        if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = gameState === 'crashed' ? '#dc3545' : '#28a745';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    const lastMultiplier = multiplierHistory[multiplierHistory.length - 1];
+    const lastX = padding + (multiplierHistory.length - 1) * xScale;
+    const lastY = canvas.height - padding - (lastMultiplier - minMultiplier) * yScale;
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.font = 'bold 18px Arial';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(lastMultiplier.toFixed(2) + 'x', lastX + 5, Math.max(lastY - 5, 20));
+}
+
+function updateUI() {
+    const now = Date.now();
+    const secondsLeft = Math.max(0, (phaseEndsAt - now) / 1000);
+
+    gameStatusElement.textContent = {
+        'waiting': 'Ожидание следующего раунда...',
+        'betting': `Ставки: ${secondsLeft.toFixed(1)} сек`,
+        'running': 'Игра идет...',
+        'crashed': `Крах на ${crashPoint !== null ? crashPoint.toFixed(2) : '--'}x`
+    }[gameState];
+
+    multiplierElement.textContent = currentMultiplier.toFixed(2) + 'x';
+
+    bettingTimerDiv.style.display = gameState === 'betting' ? 'block' : 'none';
+    bettingTimerDiv.textContent = Math.ceil(secondsLeft);
+
+    const hasActiveBet = bet !== null && bet.cashoutMultiplier === null;
+    placeBetButton.style.display = gameState === 'running' ? 'none' : 'block';
+    placeBetButton.disabled = gameState !== 'betting' || bet !== null;
+    cashoutButton.style.display = gameState === 'running' && hasActiveBet ? 'block' : 'none';
+}
+
+function addRoundToHistory(point) {
+    const span = document.createElement('span');
+    span.className = 'badge me-1 mb-1';
+    span.textContent = `${point.toFixed(2)}x`;
+    if (point < 2.00) {
+        span.classList.add('bg-danger');
+    } else if (point < 10.00) {
+        span.classList.add('bg-warning');
+    } else {
+        span.classList.add('bg-success');
+    }
+    roundHistoryDiv.prepend(span);
+    while (roundHistoryDiv.children.length > 20) {
+        roundHistoryDiv.removeChild(roundHistoryDiv.lastChild);
+    }
+}
+
+// --- Игровой цикл ---
+
+function startBetting() {
+    clearInterval(timer);
+    gameState = 'betting';
+    crashPoint = calculateCrashPoint();
+    currentMultiplier = 1.0;
+    multiplierHistory = [];
+    bet = null;
+    phaseEndsAt = Date.now() + BETTING_PHASE_MS;
+    roundResultsDiv.style.display = 'none';
+    userBetStatusDiv.textContent = 'Сделайте вашу ставку!';
+    drawGraph();
+    updateUI();
+
+    timer = setInterval(() => {
+        if (Date.now() >= phaseEndsAt) {
+            startRunning();
+        } else {
+            updateUI();
+        }
+    }, 100);
+}
+
+function startRunning() {
+    clearInterval(timer);
+    gameState = 'running';
+    startTime = Date.now();
+    multiplierHistory = [1.0];
+    userBetStatusDiv.textContent = bet ? 'Игра идет. Успейте забрать выигрыш!' : 'Игра идет. Ставка в этом раунде не сделана.';
+    updateUI();
+    timer = setInterval(tick, UPDATE_INTERVAL_MS);
+}
+
+function tick() {
+    const elapsed = (Date.now() - startTime) / 1000;
+    const multiplier = Math.pow(2, elapsed * GROWTH_RATE);
+
+    // Авто-кэшаут срабатывает, если его значение достигнуто раньше краша
+    if (bet && bet.cashoutMultiplier === null && bet.autoCashout !== null &&
+        bet.autoCashout < crashPoint && multiplier >= bet.autoCashout) {
+        cashout(bet.autoCashout);
+    }
+
+    if (multiplier >= crashPoint - 0.005) {
+        currentMultiplier = crashPoint;
+        multiplierHistory.push(crashPoint);
+        crash();
+        return;
+    }
+
+    currentMultiplier = multiplier;
+    multiplierHistory.push(multiplier);
+    drawGraph();
+    updateUI();
+}
+
+function crash() {
+    clearInterval(timer);
+    gameState = 'crashed';
+    drawGraph();
+
+    roundResultsDiv.style.display = 'block';
+    roundCrashPointDiv.textContent = `Крах на ${crashPoint.toFixed(2)}x`;
+    addRoundToHistory(crashPoint);
+
+    if (bet) {
+        if (bet.cashoutMultiplier !== null) {
+            userRoundResultDiv.className = 'alert alert-success text-center';
+            userRoundResultDiv.textContent = `Вы забрали выигрыш на ${bet.cashoutMultiplier.toFixed(2)}x. Выигрыш: ${bet.winAmount}₽`;
+        } else {
+            userRoundResultDiv.className = 'alert alert-danger text-center';
+            userRoundResultDiv.textContent = `Вы проиграли ${bet.amount}₽`;
+        }
+        userRoundResultDiv.style.display = 'block';
+    } else {
+        userRoundResultDiv.style.display = 'none';
+    }
+
+    userBetStatusDiv.textContent = 'Раунд завершен. Следующий раунд скоро начнется.';
+    updateUI();
+    timer = setTimeout(startBetting, WAIT_BETWEEN_ROUNDS_MS);
+}
+
+function cashout(multiplier) {
+    if (gameState !== 'running' || !bet || bet.cashoutMultiplier !== null) return;
+    const winAmount = Math.floor(bet.amount * multiplier);
+    bet.cashoutMultiplier = multiplier;
+    bet.winAmount = winAmount;
+    const result = Casino.addWin(winAmount, 'crash', { result: `Кэшаут на ${multiplier.toFixed(2)}x` });
+    if (result.ok) updateBalance(result.balance);
+    userBetStatusDiv.textContent = `Вы успешно забрали выигрыш на ${multiplier.toFixed(2)}x. Выигрыш: ${winAmount}₽`;
+    updateUI();
+}
+
+// --- Кнопки ---
+
+placeBetButton.addEventListener('click', () => {
+    if (gameState !== 'betting') {
+        userBetStatusDiv.textContent = 'Сейчас нельзя делать ставки.';
+        return;
+    }
+    if (bet) {
+        userBetStatusDiv.textContent = 'Вы уже сделали ставку в этом раунде.';
+        return;
+    }
+
+    const betAmount = parseInt(betAmountInput.value);
+    const autoRaw = autoCashoutInput.value.trim();
+    const autoCashout = autoRaw === '' ? null : Math.round(parseFloat(autoRaw) * 100) / 100;
+
+    if (isNaN(betAmount) || betAmount < 1) {
+        alert('Введите корректную сумму ставки');
+        return;
+    }
+    if (autoCashout !== null && (isNaN(autoCashout) || autoCashout < 1.01)) {
+        alert('Введите корректный авто-кэшаут (минимум 1.01) или оставьте поле пустым');
+        return;
+    }
+
+    const result = Casino.placeBet(betAmount, 'crash', {
+        result: autoCashout !== null ? `Авто-кэшаут ${autoCashout.toFixed(2)}x` : null
+    });
+    if (!result.ok) {
+        alert(result.error);
+        return;
+    }
+
+    updateBalance(result.balance);
+    bet = { amount: betAmount, autoCashout: autoCashout, cashoutMultiplier: null, winAmount: 0 };
+    userBetStatusDiv.textContent = 'Ваша ставка принята. Ожидание раунда...';
+    updateUI();
+});
+
+cashoutButton.addEventListener('click', () => cashout(Math.floor(currentMultiplier * 100) / 100));
+
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+startBetting();
+});
+</script>
+</body>
+</html>

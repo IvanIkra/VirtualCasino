@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Слоты</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+    .reel {
+        width: 90px;
+        height: 270px;
+        border: 2px solid #ccc;
+        border-radius: 10px;
+        background: #1a1c2c;
+        overflow: hidden;
+        position: relative; /* Добавляем для позиционирования ленты */
+    }
+    .reel-strip {
+        display: flex;
+        flex-direction: column;
+        position: absolute; /* Позиционируем ленту абсолютно */
+        top: 0; /* Начальная позиция вверху */
+        left: 0;
+        width: 100%;
+    }
+    .symbol {
+        font-size: 48px;
+        height: 90px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    </style>
+</head>
+<body class="bg-dark text-light" data-auth="user">
+<div class="container mt-4">
+    <div id="flash-area"></div>
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="game-container">
+                    <h2 class="text-center mb-4">🎰 Слоты</h2>
+
+                    <!-- Отображение баланса -->
+                    <div class="text-center mb-3">
+                        <span class="balance me-3">Баланс: <span class="balance-amount">0.00</span>₽</span>
+                    </div>
+
+                    <!-- Игровое поле -->
+                    <div class="slots-machine">
+                        <div class="reels-container d-flex justify-content-center gap-3">
+                            <div class="reel" id="reel-0"><div class="reel-strip"></div></div>
+                            <div class="reel" id="reel-1"><div class="reel-strip"></div></div>
+                            <div class="reel" id="reel-2"><div class="reel-strip"></div></div>
+                        </div>
+                    </div>
+
+                    <!-- Панель управления -->
+                    <div class="control-panel mt-4">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="bet-amount">Сумма ставки</label>
+                                    <input type="number" class="form-control" id="bet-amount" min="1" value="10">
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <button class="btn btn-play w-100" id="spin-button">Крутить</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Результаты -->
+                    <div class="results mt-4" id="results" style="display: none;">
+                        <div class="win-lines"></div>
+                        <div class="win-amount"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="js/store.js"></script>
+<script src="js/layout.js"></script>
+<script>
+Casino.ready(user => {
+const REELS = 3;
+const ROWS = 3;
+const SYMBOL_HEIGHT = 90; // Высота одного символа в пикселях
+const VISIBLE_SYMBOLS = 3; // Сколько символов видно в барабане
+
+let isSpinning = false;
+
+updateBalance(user.balance);
+
+// --- Игровая логика (перенесена из games/slots.py) ---
+
+function loadConfig() {
+    const config = Casino.getConfig('slots');
+    const symbols = config && Array.isArray(config.SYMBOLS) ? config.SYMBOLS : [];
+    const weights = (config && config.WEIGHTS) || {};
+    const totalWeight = symbols.reduce((sum, s) => sum + (Number(weights[s]) || 0), 0);
+    // Fallback на дефолтную конфигурацию если конфиг пустой или некорректный
+    if (!symbols.length || totalWeight <= 0) {
+        return Casino.getDefaultConfig('slots');
+    }
+    return config;
+}
+
+function weightedChoice(symbols, weights) {
+    const weightsList = symbols.map(s => Math.max(0, Number(weights[s]) || 0));
+    const total = weightsList.reduce((a, b) => a + b, 0);
+    let r = Math.random() * total;
+    for (let i = 0; i < symbols.length; i++) {
+        r -= weightsList[i];
+        if (r < 0) return symbols[i];
+    }
+    return symbols[symbols.length - 1];
+}
+
+function generateReel(config) {
+    const reel = [];
+    for (let i = 0; i < ROWS; i++) {
+        reel.push(weightedChoice(config.SYMBOLS, config.WEIGHTS));
+    }
+    return reel;
+}
+
+function allSame(line) {
+    return line.every(s => s === line[0]);
+}
+
+function calculateWin(symbols, betAmount, config) {
+    const payouts = config.PAYOUTS || {};
+    let totalWin = 0;
+    const winningLines = [];
+
+    function addLine(line, label) {
+        const win = betAmount * (Number(payouts[line[0]]) || 0);
+        totalWin += win;
+        winningLines.push(`${label}: ${line.join('')} Выигрыш: ${win}₽`);
+    }
+
+    // Каждый элемент symbols — барабан, на экране он стоит вертикально
+    symbols.forEach((reel, idx) => {
+        if (allSame(reel)) addLine(reel, `Вертикальная линия ${idx + 1}`);
+    });
+
+    for (let row = 0; row < ROWS; row++) {
+        const line = symbols.map(reel => reel[row]);
+        if (allSame(line)) addLine(line, `Горизонтальная линия ${row + 1}`);
+    }
+
+    const diagonal1 = symbols.map((reel, i) => reel[i]);
+    const diagonal2 = symbols.map((reel, i) => reel[ROWS - 1 - i]);
+    if (allSame(diagonal1)) addLine(diagonal1, 'Диагональ \\');
+    if (allSame(diagonal2)) addLine(diagonal2, 'Диагональ /');
+
+    return { totalWin: Casino.money(totalWin), winningLines };
+}
+
+function playSlots(betAmount) {
+    const config = loadConfig();
+    const bet = Casino.placeBet(betAmount, 'slots');
+    if (!bet.ok) return { error: bet.error };
+
+    const reels = [];
+    for (let i = 0; i < REELS; i++) reels.push(generateReel(config));
+    const { totalWin, winningLines } = calculateWin(reels, betAmount, config);
+
+    let balance = bet.balance;
+    if (totalWin > 0) {
+        balance = Casino.addWin(totalWin, 'slots', { result: winningLines.length + ' выигрышн. линий' }).balance;
+    }
+
+    return {
+        reels: reels,
+        win: totalWin > 0,
+        win_amount: totalWin,
+        balance: balance,
+        winning_lines: winningLines
+    };
+}
+
+// --- Анимация барабанов ---
+
+function getRandomSymbols(count) {
+    const symbols = loadConfig().SYMBOLS;
+    const arr = [];
+    for (let i = 0; i < count; i++) {
+        arr.push(symbols[Math.floor(Math.random() * symbols.length)]);
+    }
+    return arr;
+}
+
+function fillReel(reelStrip, symbols) {
+    reelStrip.innerHTML = symbols.map(s => `<div class="symbol">${escapeHtml(s)}</div>`).join('');
+    reelStrip.style.transform = 'translateY(0px)';
+}
+
+function spinReel(reelElement, finalSymbols, duration) {
+    const reelStrip = reelElement.querySelector('.reel-strip');
+    let currentSymbols = Array.from(reelStrip.querySelectorAll('.symbol')).map(s => s.textContent);
+
+    if (currentSymbols.length !== VISIBLE_SYMBOLS) {
+        currentSymbols = getRandomSymbols(VISIBLE_SYMBOLS);
+    }
+
+    // Длинная лента: текущие символы + случайные + финальные
+    const randomCount = 30;
+    const extendedSymbols = currentSymbols.concat(getRandomSymbols(randomCount), finalSymbols);
+    fillReel(reelStrip, extendedSymbols);
+
+    // Останавливаемся так, чтобы были видны финальные символы
+    const targetPosition = -((extendedSymbols.length - VISIBLE_SYMBOLS) * SYMBOL_HEIGHT);
+
+    reelStrip.style.transition = 'none';
+    reelStrip.style.transform = 'translateY(0px)';
+
+    setTimeout(() => {
+        reelStrip.style.transition = `transform ${duration}ms cubic-bezier(0.21, 1, 0.5, 1)`;
+        reelStrip.style.transform = `translateY(${targetPosition}px)`;
+    }, 50);
+
+    // После анимации оставляем только итоговые символы
+    return new Promise(resolve => {
+        setTimeout(() => {
+            reelStrip.style.transition = 'none';
+            fillReel(reelStrip, finalSymbols);
+            resolve();
+        }, duration + 100);
+    });
+}
+
+async function spin() {
+    if (isSpinning) return;
+    isSpinning = true;
+    document.getElementById('results').style.display = 'none';
+    const reels = Array.from(document.querySelectorAll('.reel'));
+
+    const betAmount = parseInt(document.getElementById('bet-amount').value);
+    if (isNaN(betAmount) || betAmount <= 0) {
+        alert('Введите корректную сумму ставки');
+        isSpinning = false;
+        return;
+    }
+
+    const data = playSlots(betAmount);
+    if (data.error) {
+        alert(data.error);
+        isSpinning = false;
+        return;
+    }
+
+    // Вращаем каждый барабан с задержкой
+    await Promise.all(reels.map((reelElement, i) =>
+        new Promise(res => setTimeout(res, i * 200)).then(() => spinReel(reelElement, data.reels[i], 2500 + i * 300))
+    ));
+
+    // Показываем результаты
+    const results = document.getElementById('results');
+    const winLines = results.querySelector('.win-lines');
+    const winAmount = results.querySelector('.win-amount');
+    results.style.display = 'block';
+    if (data.win) {
+        winLines.innerHTML = '<div class="alert alert-success">Выигрышная комбинация!</div>' +
+            data.winning_lines.map(line => `<div class="alert alert-info">${escapeHtml(line)}</div>`).join('');
+        winAmount.innerHTML = `<div class="alert alert-success">Общий выигрыш: ${data.win_amount}₽</div>`;
+    } else {
+        winLines.innerHTML = '<div class="alert alert-danger">К сожалению, вы проиграли</div>';
+        winAmount.innerHTML = '';
+    }
+    updateBalance(data.balance);
+
+    isSpinning = false;
+}
+
+document.querySelectorAll('.reel-strip').forEach(strip => fillReel(strip, getRandomSymbols(VISIBLE_SYMBOLS)));
+document.getElementById('spin-button').addEventListener('click', spin);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Рулетка</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+    .roulette-wheel {
+        width: 100%;
+        max-width: 750px;
+        aspect-ratio: 1;
+        container-type: inline-size;
+        margin: 0 auto;
+        position: relative;
+        border-radius: 50%;
+        border: 10px solid #d6cfcf;
+        background: #33c0b2;
+        overflow: hidden;
+        box-shadow: inset 0 0 50px rgba(0,0,0,0.5);
+    }
+
+    .wheel-container {
+        width: 100%;
+        height: 100%;
+        position: relative;
+    }
+
+    .wheel {
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        top: 0;
+        left: 0;
+        transition: transform 5s cubic-bezier(0.21, 0.53, 0.29, 0.99);
+    }
+
+    .sector {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 1px;
+        height: 1px;
+        transform-origin: 0 0;
+        transform: translate(-0.5px, -0.5px) rotate(var(--rotation));
+    }
+
+    .number {
+        position: absolute;
+        top: -40cqw;
+        left: 0;
+        transform: translate(-50%, -50%) rotate(-90deg);
+        font-size: calc(100cqw / 35);
+        white-space: nowrap;
+        z-index: 3;
+        text-shadow: 0 0 8px #fff, 0 0 8px #fff;
+    }
+
+    .sector.green .number { color: #00ff00; }
+    .sector.red .number { color: #ff0000; }
+    .sector.black .number { color: #000000; }
+
+    .indicator-arrow {
+        position: absolute;
+        top: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 0;
+        height: 0;
+        border-left: 10px solid transparent;
+        border-right: 10px solid transparent;
+        border-top: 20px solid white;
+        z-index: 101;
+    }
+
+    /* Стили для панели ставок */
+    .betting-panel {
+        height: 100%;
+        box-shadow: 0 0 20px rgba(0,0,0,0.3);
+        background: #1a1a1a !important;
+    }
+
+    .form-control:focus {
+        background-color: #2c2c2c !important;
+        border-color: #6c757d !important;
+        color: #fff !important;
+        box-shadow: none;
+    }
+
+    .btn-play {
+        background: #33c0b2;
+        border: none;
+        color: white;
+        font-weight: bold;
+        padding: 12px;
+        transition: all 0.3s ease;
+    }
+
+    .btn-play:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        background: #2a9d92;
+        color: white;
+    }
+
+    .alert {
+        border: none;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+    }
+
+    .alert-info {
+        background-color: rgba(23, 162, 184, 0.2);
+        color: #17a2b8;
+    }
+
+    .alert-success {
+        background-color: rgba(40, 167, 69, 0.2);
+        color: #28a745;
+    }
+
+    .alert-danger {
+        background-color: rgba(220, 53, 69, 0.2);
+        color: #dc3545;
+    }
+    </style>
+</head>
+<body class="bg-dark text-light" data-auth="user">
+<div class="container mt-4">
+    <div id="flash-area"></div>
+    <div class="container-fluid mt-4">
+        <div class="row">
+            <!-- Колесо рулетки -->
+            <div class="col-md-8">
+                <div class="game-container">
+                    <h2 class="text-center mb-4">🎡 Рулетка</h2>
+                    <div class="roulette-wheel d-flex justify-content-center">
+                        <div class="wheel-container">
+                            <div class="wheel" id="wheel"></div>
+                            <div class="indicator-arrow"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Панель ставок -->
+            <div class="col-md-4">
+                <div class="betting-panel p-4 bg-dark rounded">
+                    <h3 class="text-light mb-4">Сделать ставку</h3>
+
+                    <!-- Сумма ставки -->
+                    <div class="form-group mb-4">
+                        <label for="bet-amount" class="text-light">Сумма ставки</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control bg-dark text-light border-secondary"
+                                   id="bet-amount" min="1" value="10">
+                            <span class="input-group-text bg-dark text-light border-secondary">₽</span>
+                        </div>
+                    </div>
+
+                    <!-- Тип ставки -->
+                    <div class="form-group mb-4">
+                        <label for="bet-type" class="text-light">Тип ставки</label>
+                        <select class="form-control bg-dark text-light border-secondary" id="bet-type">
+                            <option value="red">На красное (x2)</option>
+                            <option value="black">На черное (x2)</option>
+                            <option value="even">На четное (x2)</option>
+                            <option value="odd">На нечетное (x2)</option>
+                            <option value="number">На число (x35)</option>
+                        </select>
+                    </div>
+
+                    <!-- Значение ставки -->
+                    <div class="form-group mb-4" id="bet-value-container" style="display: none;">
+                        <label for="bet-value" class="text-light">Значение</label>
+                        <input type="number" class="form-control bg-dark text-light border-secondary"
+                               id="bet-value" min="0" max="36" placeholder="Введите число (0-36)">
+                    </div>
+
+                    <!-- Кнопка ставки -->
+                    <button class="btn btn-play w-100 mb-4" id="spin-button">
+                        <i class="fas fa-dice"></i> Крутить
+                    </button>
+
+                    <!-- Результаты -->
+                    <div class="results" id="results" style="display: none;">
+                        <div class="result-number"></div>
+                        <div class="win-amount"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="js/store.js"></script>
+<script src="js/layout.js"></script>
+<script>
+Casino.ready(() => {
+const SECTOR_COUNT = 37;
+const SECTOR_ANGLE = 9.73;
+const RED_NUMBERS = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36];
+const COLOR_NAMES = { green: 'зеленый', red: 'красный', black: 'черный' };
+
+let isSpinning = false;
+let currentRotation = 0;
+
+function colorOf(number) {
+    if (number === 0) return 'green';
+    return RED_NUMBERS.includes(number) ? 'red' : 'black';
+}
+
+// Секторы колеса
+const wheel = document.getElementById('wheel');
+for (let i = 0; i < SECTOR_COUNT; i++) {
+    const sector = document.createElement('div');
+    sector.className = `sector ${colorOf(i)}`;
+    sector.dataset.number = i;
+    sector.style.setProperty('--rotation', `${i * SECTOR_ANGLE}deg`);
+    sector.innerHTML = `<span class="number">${i}</span>`;
+    wheel.appendChild(sector);
+}
+
+// --- Игровая логика (перенесена из games/roulette.py) ---
+
+function playRoulette(betType, betAmount, betValue) {
+    let betNumber = null;
+    if (betType === 'number') {
+        const raw = String(betValue).trim();
+        betNumber = Number(raw);
+        if (raw === '' || !Number.isInteger(betNumber)) {
+            return { error: 'Неверное значение для ставки на число' };
+        }
+        if (betNumber < 0 || betNumber > 36) {
+            return { error: 'Неверное число для ставки (допустимо 0-36)' };
+        }
+    } else if (!['red', 'black', 'even', 'odd'].includes(betType)) {
+        return { error: 'Неверный тип ставки' };
+    }
+
+    const bet = Casino.placeBet(betAmount, 'roulette', {
+        bet_type: betType,
+        bet_value: betNumber !== null ? String(betNumber) : null
+    });
+    if (!bet.ok) return { error: bet.error };
+
+    const result = Math.floor(Math.random() * SECTOR_COUNT);
+    const color = colorOf(result);
+    let winAmount = 0;
+
+    if (betType === 'number') {
+        if (betNumber === result) winAmount = betAmount * 35;
+    } else if (betType === 'red' || betType === 'black') {
+        if (betType === color) winAmount = betAmount * 2;
+    } else if (betType === 'even') {
+        if (result !== 0 && result % 2 === 0) winAmount = betAmount * 2;
+    } else if (betType === 'odd') {
+        if (result % 2 === 1) winAmount = betAmount * 2;
+    }
+
+    let balance = bet.balance;
+    if (winAmount > 0) {
+        balance = Casino.addWin(winAmount, 'roulette', {
+            bet_type: betType,
+            bet_value: betNumber !== null ? String(betNumber) : null,
+            result: `Выпало ${result} (${COLOR_NAMES[color]})`
+        }).balance;
+    }
+
+    return { result, color, win: winAmount > 0, win_amount: winAmount, balance };
+}
+
+function updateBetValue() {
+    const isNumber = document.getElementById('bet-type').value === 'number';
+    document.getElementById('bet-value-container').style.display = isNumber ? 'block' : 'none';
+}
+
+function spin() {
+    if (isSpinning) return;
+
+    const betAmount = parseInt(document.getElementById('bet-amount').value);
+    const betType = document.getElementById('bet-type').value;
+    const betValue = document.getElementById('bet-value').value;
+
+    if (isNaN(betAmount) || betAmount <= 0) {
+        alert('Введите корректную сумму ставки');
+        return;
+    }
+
+    const data = playRoulette(betType, betAmount, betValue);
+    if (data.error) {
+        alert(data.error);
+        return;
+    }
+
+    isSpinning = true;
+    document.getElementById('results').style.display = 'none';
+
+    // Поворачиваем колесо так, чтобы выпавший сектор оказался под стрелкой
+    const targetAngle = (360 - data.result * SECTOR_ANGLE) % 360;
+    const normalizedCurrent = ((currentRotation % 360) + 360) % 360;
+    let angleDifference = targetAngle - normalizedCurrent;
+    if (angleDifference < 0) angleDifference += 360;
+    const extraSpins = 10;
+    currentRotation += extraSpins * 360 + angleDifference;
+
+    const duration = 5000;
+    wheel.style.transition = `transform ${duration}ms cubic-bezier(0.21, 0.53, 0.29, 0.99)`;
+    wheel.style.transform = `rotate(${currentRotation}deg)`;
+
+    setTimeout(() => {
+        const results = document.getElementById('results');
+        const resultNumber = results.querySelector('.result-number');
+        const winAmount = results.querySelector('.win-amount');
+        results.style.display = 'block';
+
+        const colorText = { green: 'зеленое', red: 'красное', black: 'черное' }[data.color];
+        const parity = data.result === 0 ? 'ноль' : (data.result % 2 === 0 ? 'четное' : 'нечетное');
+        resultNumber.innerHTML = `<div class="alert alert-info">Выпало число: ${data.result}, ${colorText}, ${parity}</div>`;
+
+        if (data.win) {
+            winAmount.innerHTML = `<div class="alert alert-success">Выигрыш: ${data.win_amount}₽</div>`;
+        } else {
+            winAmount.innerHTML = '<div class="alert alert-danger">К сожалению, вы проиграли</div>';
+        }
+
+        updateBalance(data.balance);
+        isSpinning = false;
+    }, duration);
+}
+
+document.getElementById('bet-type').addEventListener('change', updateBetValue);
+document.getElementById('spin-button').addEventListener('click', spin);
+updateBetValue();
+});
+</script>
+</body>
+</html>

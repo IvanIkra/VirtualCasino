@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Сапер</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+    .mines-grid {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 10px;
+        max-width: 500px;
+        margin: 0 auto;
+    }
+
+    .mine-cell {
+        aspect-ratio: 1;
+        background-color: #2c3e50;
+        border: none;
+        border-radius: 5px;
+        color: white;
+        font-size: 1.5rem;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+
+    .mine-cell:hover:not(:disabled) {
+        background-color: #34495e;
+    }
+
+    .mine-cell:disabled {
+        cursor: default;
+    }
+
+    .mine-cell.revealed {
+        background-color: #27ae60;
+    }
+
+    .mine-cell.mine {
+        background-color: #c0392b;
+    }
+
+    #round-history {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+    }
+
+    .history-item {
+        padding: 5px 10px;
+        border-radius: 3px;
+        font-weight: bold;
+    }
+    </style>
+</head>
+<body class="bg-dark text-light" data-auth="user">
+<div class="container mt-4">
+    <div id="flash-area"></div>
+    <div class="container mt-4">
+        <div class="row g-4">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="mb-0">💣 Сапер</h3>
+                    </div>
+                    <div class="card-body">
+                        <!-- Game Status -->
+                        <div class="mb-3">
+                            <h4 id="game-status">Делайте ставки</h4>
+                            <div id="current-multiplier" class="h5">1.00x</div>
+                        </div>
+
+                        <!-- Game Grid -->
+                        <div class="mines-grid mb-3" id="mines-grid"></div>
+
+                        <!-- Betting Controls -->
+                        <div class="betting-controls mb-3">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="bet-amount">Сумма ставки:</label>
+                                        <input type="number" class="form-control" id="bet-amount" min="1" value="100">
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="mines-count">Количество мин:</label>
+                                        <select class="form-control" id="mines-count">
+                                            <option value="3">3 мины</option>
+                                            <option value="5">5 мин</option>
+                                            <option value="7">7 мин</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row mt-3">
+                                <div class="col-12">
+                                    <button id="place-bet-button" class="btn btn-primary">Сделать ставку</button>
+                                    <button id="cashout-button" class="btn btn-success" style="display: none;">Забрать выигрыш</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Game Status Messages -->
+                        <div id="user-bet-status" class="alert alert-info">Сделайте вашу ставку</div>
+                        <div id="round-results" class="alert" style="display: none;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <!-- Game History -->
+                <div class="card">
+                    <div class="card-header">
+                        <h4 class="mb-0">История</h4>
+                    </div>
+                    <div class="card-body">
+                        <div id="round-history" class="d-flex flex-wrap"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="js/store.js"></script>
+<script src="js/layout.js"></script>
+<script>
+Casino.ready(() => {
+const GRID_SIZE = 5;
+const TOTAL_CELLS = GRID_SIZE * GRID_SIZE;
+const ALLOWED_MINES = [3, 5, 7];
+
+// Состояние игры (как в games/mines.py)
+let gameState = 'betting'; // betting, running, finished
+let minesCount = 3;
+let minesPositions = [];
+let revealedPositions = [];
+let playerBet = null;
+let currentMultiplier = 1.0;
+let history = [];
+
+const minesGrid = document.getElementById('mines-grid');
+const placeBetButton = document.getElementById('place-bet-button');
+const cashoutButton = document.getElementById('cashout-button');
+const betAmountInput = document.getElementById('bet-amount');
+const minesCountSelect = document.getElementById('mines-count');
+const gameStatusElement = document.getElementById('game-status');
+const currentMultiplierElement = document.getElementById('current-multiplier');
+const userBetStatusDiv = document.getElementById('user-bet-status');
+const roundResultsDiv = document.getElementById('round-results');
+const roundHistoryDiv = document.getElementById('round-history');
+
+function calculateMultiplier() {
+    const safePositions = TOTAL_CELLS - minesCount;
+    if (revealedPositions.length === 0) return 1.0;
+    return Math.round((1.0 + (revealedPositions.length / safePositions) * 2.0) * 100) / 100;
+}
+
+function randomSample(count) {
+    const positions = Array.from({ length: TOTAL_CELLS }, (_, i) => i);
+    for (let i = positions.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [positions[i], positions[j]] = [positions[j], positions[i]];
+    }
+    return positions.slice(0, count);
+}
+
+function addToHistory(result, multiplier) {
+    history.push({ result, multiplier });
+    history = history.slice(-10);
+    renderHistory();
+}
+
+function renderHistory() {
+    roundHistoryDiv.innerHTML = '';
+    history.slice().reverse().forEach(item => {
+        const historyItem = document.createElement('div');
+        historyItem.className = 'history-item';
+        if (item.result === 'mine') {
+            historyItem.style.backgroundColor = '#c0392b';
+            historyItem.textContent = '💣';
+        } else if (item.result === 'win') {
+            historyItem.style.backgroundColor = '#27ae60';
+            historyItem.textContent = `${item.multiplier.toFixed(2)}x`;
+        } else if (item.result === 'cashout') {
+            historyItem.style.backgroundColor = '#2980b9';
+            historyItem.textContent = `${item.multiplier.toFixed(2)}x`;
+        }
+        roundHistoryDiv.appendChild(historyItem);
+    });
+}
+
+function initializeGrid() {
+    minesGrid.innerHTML = '';
+    for (let i = 0; i < TOTAL_CELLS; i++) {
+        const cell = document.createElement('button');
+        cell.className = 'mine-cell';
+        cell.dataset.position = i;
+        cell.addEventListener('click', () => revealPosition(i));
+        minesGrid.appendChild(cell);
+    }
+}
+
+function updateUI() {
+    gameStatusElement.textContent = {
+        'betting': 'Делайте ставки',
+        'running': 'Игра идет...',
+        'finished': 'Раунд завершен'
+    }[gameState];
+    currentMultiplierElement.textContent = `${currentMultiplier.toFixed(2)}x`;
+
+    minesGrid.querySelectorAll('.mine-cell').forEach(cell => {
+        const pos = parseInt(cell.dataset.position);
+        const isRevealed = revealedPositions.includes(pos);
+        const showMine = gameState === 'finished' && minesPositions.includes(pos);
+        cell.classList.toggle('revealed', isRevealed && !minesPositions.includes(pos));
+        cell.classList.toggle('mine', showMine);
+        cell.textContent = showMine ? '💣' : (isRevealed ? '💎' : '');
+        cell.disabled = gameState !== 'running' || isRevealed;
+    });
+
+    const canBet = gameState !== 'running';
+    betAmountInput.disabled = !canBet;
+    minesCountSelect.disabled = !canBet;
+    placeBetButton.style.display = canBet ? 'inline-block' : 'none';
+    cashoutButton.style.display = gameState === 'running' ? 'inline-block' : 'none';
+    if (gameState === 'running') {
+        const winAmount = playerBet * currentMultiplier;
+        cashoutButton.textContent = `Забрать выигрыш (${formatMoney(winAmount)}₽)`;
+    }
+}
+
+function finishRound(win, winAmount) {
+    gameState = 'finished';
+    userBetStatusDiv.style.display = 'none';
+    if (win) {
+        roundResultsDiv.className = 'alert alert-success';
+        roundResultsDiv.textContent = `Поздравляем! Вы выиграли ${formatMoney(winAmount)}₽`;
+    } else {
+        roundResultsDiv.className = 'alert alert-danger';
+        roundResultsDiv.textContent = 'Игра окончена. Вы попали на мину!';
+    }
+    roundResultsDiv.style.display = 'block';
+    updateUI();
+}
+
+function payout(kind) {
+    const winAmount = Casino.money(playerBet * currentMultiplier);
+    const result = Casino.addWin(winAmount, 'mines', {
+        result: `${kind === 'win' ? 'Все клетки открыты' : 'Кэшаут'} на ${currentMultiplier.toFixed(2)}x (${minesCount} мин)`
+    });
+    if (result.ok) updateBalance(result.balance);
+    addToHistory(kind, currentMultiplier);
+    finishRound(true, winAmount);
+}
+
+function placeBet() {
+    if (gameState === 'running') return;
+    const betAmount = parseFloat(betAmountInput.value);
+    const mines = parseInt(minesCountSelect.value);
+
+    if (isNaN(betAmount) || betAmount < 1) {
+        alert('Минимальная ставка - 1₽');
+        return;
+    }
+    if (!ALLOWED_MINES.includes(mines)) {
+        alert('Выберите корректное количество мин (3, 5 или 7)');
+        return;
+    }
+
+    const result = Casino.placeBet(betAmount, 'mines', { result: `Ставка ${betAmount}₽ в игре Сапер (${mines} мин)` });
+    if (!result.ok) {
+        alert(result.error);
+        return;
+    }
+    updateBalance(result.balance);
+
+    minesCount = mines;
+    playerBet = betAmount;
+    minesPositions = randomSample(minesCount);
+    revealedPositions = [];
+    currentMultiplier = 1.0;
+    gameState = 'running';
+
+    initializeGrid();
+    roundResultsDiv.style.display = 'none';
+    userBetStatusDiv.textContent = 'Ставка принята. Открывайте клетки!';
+    userBetStatusDiv.style.display = 'block';
+    updateUI();
+}
+
+function revealPosition(position) {
+    if (gameState !== 'running' || revealedPositions.includes(position)) return;
+
+    revealedPositions.push(position);
+    if (minesPositions.includes(position)) {
+        addToHistory('mine', null);
+        finishRound(false, 0);
+        return;
+    }
+
+    currentMultiplier = calculateMultiplier();
+    if (revealedPositions.length === TOTAL_CELLS - minesCount) {
+        payout('win');
+    } else {
+        userBetStatusDiv.textContent = 'Игра идет...';
+        updateUI();
+    }
+}
+
+function cashout() {
+    if (gameState !== 'running' || !playerBet) return;
+    payout('cashout');
+}
+
+placeBetButton.addEventListener('click', placeBet);
+cashoutButton.addEventListener('click', cashout);
+
+initializeGrid();
+updateUI();
+});
+</script>
+</body>
+</html>

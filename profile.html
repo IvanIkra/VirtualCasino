@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Личный кабинет</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-dark text-light" data-auth="user">
+<div class="container mt-4">
+    <div id="flash-area"></div>
+    <div class="container mt-5">
+        <div class="row">
+            <!-- Информация о пользователе -->
+            <div class="col-md-4">
+                <div class="card bg-dark text-white mb-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Информация о пользователе</h5>
+                        <p class="card-text">Имя пользователя: <span id="profile-username"></span></p>
+                        <p class="card-text">Баланс: <span class="balance-amount"></span>₽</p>
+                        <p class="card-text">Статус: <span id="profile-status"></span></p>
+                        <p class="card-text">Дата регистрации: <span id="profile-created"></span></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Статистика -->
+            <div class="col-md-8">
+                <div class="card bg-dark text-white mb-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Статистика</h5>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="stat-item">
+                                    <h6>Общий доход</h6>
+                                    <p class="text-success"><span id="profile-income"></span>₽</p>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="stat-item">
+                                    <h6>Общий расход</h6>
+                                    <p class="text-danger"><span id="profile-expense"></span>₽</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- История транзакций -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card bg-dark text-white">
+                    <div class="card-body">
+                        <h5 class="card-title">История транзакций</h5>
+                        <div class="table-responsive">
+                            <table class="table table-dark table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Дата</th>
+                                        <th>Тип</th>
+                                        <th>Игра</th>
+                                        <th>Ставка</th>
+                                        <th>Результат</th>
+                                        <th>Сумма</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="transactions-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="js/store.js"></script>
+<script src="js/layout.js"></script>
+<script>
+Casino.ready(user => {
+    document.getElementById('profile-username').textContent = user.username;
+    document.getElementById('profile-status').textContent = user.is_admin ? 'Администратор' : 'Пользователь';
+    document.getElementById('profile-created').textContent = formatDate(user.created_at);
+    document.getElementById('profile-income').textContent = formatMoney(user.total_income);
+    document.getElementById('profile-expense').textContent = formatMoney(user.total_expense);
+    updateBalance(user.balance);
+
+    const tbody = document.getElementById('transactions-body');
+    // Новые транзакции сверху
+    user.transactions.slice().reverse().forEach(tx => {
+        let bet = '-';
+        if (tx.bet_type) {
+            bet = tx.bet_type + (tx.bet_value ? ` (${tx.bet_value})` : '');
+        }
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${formatDate(tx.timestamp)}</td>
+            <td>${escapeHtml(tx.type)}</td>
+            <td>${escapeHtml(tx.game_type || '-')}</td>
+            <td>${escapeHtml(bet)}</td>
+            <td>${escapeHtml(tx.result || '-')}</td>
+            <td class="${tx.amount > 0 ? 'text-success' : 'text-danger'}">${formatMoney(tx.amount)}₽</td>`;
+        tbody.appendChild(row);
+    });
+});
+</script>
+</body>
+</html>
