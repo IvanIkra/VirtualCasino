@@ -129,51 +129,139 @@ function calculateCrashPoint() {
 
 // --- Отрисовка ---
 
+const PADDING = 20;
+const BREAD_SIZE = 40;
+const GRAVITY = 1400; // px/с² для падения хлеба
+
+let breadTip = { x: PADDING, y: 0, angle: 0 }; // где хлеб летит сейчас
+let fall = null; // состояние падения после краша
+let fallFrame = null;
+
 function resizeCanvas() {
     canvas.width = graphContainer.clientWidth;
     canvas.height = graphContainer.clientHeight;
     drawGraph();
 }
 
+function drawBread(x, y, angle, size) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.font = `${size}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🍞', 0, 0);
+    ctx.restore();
+}
+
 function drawGraph() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (multiplierHistory.length < 2) return;
-
-    const maxMultiplier = Math.max(...multiplierHistory, 1.1);
-    const minMultiplier = 1.00;
-    const range = maxMultiplier - minMultiplier;
-    const padding = 20;
+    const floorY = canvas.height - PADDING;
 
     // Оси
     ctx.strokeStyle = '#444';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(padding, 0);
-    ctx.lineTo(padding, canvas.height - padding);
-    ctx.lineTo(canvas.width, canvas.height - padding);
+    ctx.moveTo(PADDING, 0);
+    ctx.lineTo(PADDING, floorY);
+    ctx.lineTo(canvas.width, floorY);
     ctx.stroke();
 
-    const xScale = (canvas.width - padding - 70) / (multiplierHistory.length - 1);
-    const yScale = (canvas.height - 2 * padding) / range;
+    breadTip = { x: PADDING + BREAD_SIZE / 2, y: floorY - BREAD_SIZE / 2, angle: 0 };
 
-    ctx.beginPath();
-    multiplierHistory.forEach((multiplier, index) => {
-        const x = padding + index * xScale;
-        const y = canvas.height - padding - (multiplier - minMultiplier) * yScale;
-        if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    });
-    ctx.strokeStyle = gameState === 'crashed' ? '#dc3545' : '#28a745';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    if (multiplierHistory.length >= 2) {
+        const maxMultiplier = Math.max(...multiplierHistory, 1.1);
+        const minMultiplier = 1.00;
+        const range = maxMultiplier - minMultiplier;
+        // Оставляем место справа и сверху, чтобы хлеб и подпись помещались
+        const xScale = (canvas.width - PADDING - 110) / (multiplierHistory.length - 1);
+        const yScale = (canvas.height - PADDING - 70) / range;
+        const toX = index => PADDING + index * xScale;
+        const toY = multiplier => floorY - (multiplier - minMultiplier) * yScale;
 
-    const lastMultiplier = multiplierHistory[multiplierHistory.length - 1];
-    const lastX = padding + (multiplierHistory.length - 1) * xScale;
-    const lastY = canvas.height - padding - (lastMultiplier - minMultiplier) * yScale;
-    ctx.fillStyle = ctx.strokeStyle;
-    ctx.font = 'bold 18px Arial';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(lastMultiplier.toFixed(2) + 'x', lastX + 5, Math.max(lastY - 5, 20));
+        ctx.beginPath();
+        multiplierHistory.forEach((multiplier, index) => {
+            if (index === 0) ctx.moveTo(toX(index), toY(multiplier)); else ctx.lineTo(toX(index), toY(multiplier));
+        });
+        ctx.strokeStyle = gameState === 'crashed' ? '#dc3545' : '#28a745';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        const last = multiplierHistory.length - 1;
+        const lastX = toX(last);
+        const lastY = toY(multiplierHistory[last]);
+        const prevIndex = Math.max(0, last - 5);
+        const slope = Math.atan2(toY(multiplierHistory[prevIndex]) - lastY, lastX - toX(prevIndex));
+        breadTip = { x: lastX, y: lastY - BREAD_SIZE / 2, angle: -Math.min(slope, 1.0) * 0.6 };
+
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.font = 'bold 18px Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(multiplierHistory[last].toFixed(2) + 'x', lastX + BREAD_SIZE / 2 + 6, Math.max(lastY - 10, 24));
+    }
+
+    if (fall) {
+        fall.crumbs.forEach(c => {
+            ctx.fillStyle = '#d9a35b';
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        drawBread(fall.x, fall.y, fall.angle, BREAD_SIZE);
+    } else if (gameState !== 'crashed') {
+        drawBread(breadTip.x, breadTip.y, breadTip.angle, BREAD_SIZE);
+    }
+
+    if (gameState === 'crashed') {
+        ctx.fillStyle = '#dc3545';
+        ctx.font = 'bold 36px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('ХЛЕБ УПАЛ!', canvas.width / 2, canvas.height / 2);
+    }
+}
+
+// Хлеб срывается с графика, кувыркается и падает вниз, роняя крошки
+function startBreadFall() {
+    cancelAnimationFrame(fallFrame);
+    const crumbs = [];
+    for (let i = 0; i < 12; i++) {
+        crumbs.push({
+            x: breadTip.x,
+            y: breadTip.y,
+            vx: (Math.random() - 0.5) * 360,
+            vy: -Math.random() * 380,
+            r: 1.5 + Math.random() * 2.5
+        });
+    }
+    fall = { x: breadTip.x, y: breadTip.y, vx: 60, vy: -260, angle: breadTip.angle, spin: 7, crumbs: crumbs };
+    let lastTime = performance.now();
+
+    function step(now) {
+        const dt = Math.min((now - lastTime) / 1000, 0.05);
+        lastTime = now;
+        fall.vy += GRAVITY * dt;
+        fall.x += fall.vx * dt;
+        fall.y += fall.vy * dt;
+        fall.angle += fall.spin * dt;
+        fall.crumbs.forEach(c => {
+            c.vy += GRAVITY * dt;
+            c.x += c.vx * dt;
+            c.y += c.vy * dt;
+        });
+        drawGraph();
+        const offScreen = fall.y - BREAD_SIZE > canvas.height && fall.crumbs.every(c => c.y > canvas.height);
+        if (!offScreen && gameState === 'crashed') {
+            fallFrame = requestAnimationFrame(step);
+        }
+    }
+    fallFrame = requestAnimationFrame(step);
+}
+
+function stopBreadFall() {
+    cancelAnimationFrame(fallFrame);
+    fall = null;
 }
 
 function updateUI() {
@@ -224,6 +312,7 @@ function startBetting() {
     currentMultiplier = 1.0;
     multiplierHistory = [];
     bet = null;
+    stopBreadFall();
     phaseEndsAt = Date.now() + BETTING_PHASE_MS;
     roundResultsDiv.style.display = 'none';
     userBetStatusDiv.textContent = 'Сделайте вашу ставку!';
@@ -276,6 +365,7 @@ function crash() {
     clearInterval(timer);
     gameState = 'crashed';
     drawGraph();
+    startBreadFall();
 
     roundResultsDiv.style.display = 'block';
     roundCrashPointDiv.textContent = `Крах на ${crashPoint.toFixed(2)}x`;
