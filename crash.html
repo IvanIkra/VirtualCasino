@@ -127,12 +127,15 @@ function calculateCrashPoint() {
     }
 }
 
-// --- Сцена: ломтик хлеба стоит на ребре, качается и падает набок ---
+// --- Сцена: ломтик хлеба стоит на ребре, качается и падает ---
 
 const FALL_ACCELERATION = 10; // рад/с² — как быстро хлеб заваливается
+const DEPTH_TILT = 0.38;      // насколько видна поверхность стола (наклон камеры)
 const BREAD_COLORS = { crust: '#b8742a', crustDark: '#8a5219', crumb: '#f3d9a4', pore: '#d9b77a' };
 
-let breadAngle = 0;    // наклон, рад; > 0 — вправо (опора на правый угол)
+// axis: 'side' — качается и падает влево/вправо, 'depth' — вперед на зрителя/назад плашмя
+let axis = 'side';
+let tilt = 0;          // наклон, рад; знак — направление (вправо / вперед)
 let wobblePhase = 0;
 let fall = null;       // { dir, velocity, bounced, settled }
 let crumbs = [];
@@ -144,9 +147,16 @@ function resizeCanvas() {
 }
 
 function sceneMetrics() {
-    const floorY = canvas.height - 40;
-    const height = Math.min(150, canvas.height * 0.55, canvas.width * 0.28);
-    return { floorY, height, width: height * 0.72, centerX: canvas.width / 2 };
+    const baseY = canvas.height - 85;
+    const height = Math.min(140, canvas.height * 0.5, canvas.width * 0.28);
+    return {
+        baseY,
+        height,
+        width: height * 0.72,
+        centerX: canvas.width / 2,
+        tableFar: baseY - height * DEPTH_TILT - 12,
+        tableNear: canvas.height - 18
+    };
 }
 
 // Контур ломтика: низ на y = 0, верх на y = -h, с «плечами» сверху
@@ -193,92 +203,145 @@ function drawSlice(w, h) {
     });
 }
 
-// Точка ломтика в координатах холста с учетом наклона вокруг опорного угла
+// Применяет к контексту положение ломтика: локальные координаты ломтика -> холст
+function applyBreadTransform(m) {
+    if (axis === 'side') {
+        const pivotX = tilt >= 0 ? m.width / 2 : -m.width / 2;
+        // Лежа на боку ломтик опирается на «плечо», поэтому немного приподнимается
+        const lift = 0.1 * m.width * Math.pow(Math.min(Math.abs(tilt) / (Math.PI / 2), 1), 3);
+        ctx.translate(m.centerX + pivotX, m.baseY - lift);
+        ctx.rotate(tilt);
+        ctx.translate(-pivotX, 0);
+    } else {
+        // Поворот вокруг нижнего ребра к зрителю/от зрителя в упрощенной перспективе
+        const scaleY = Math.cos(tilt) - DEPTH_TILT * Math.sin(tilt);
+        const scaleX = 1 + 0.12 * Math.sin(tilt) * Math.abs(Math.sin(tilt));
+        ctx.translate(m.centerX, m.baseY);
+        ctx.scale(scaleX, scaleY);
+    }
+}
+
 function slicePointToCanvas(localX, localY, m) {
-    const pivotX = breadAngle >= 0 ? m.width / 2 : -m.width / 2;
-    const dx = localX - pivotX;
-    const cos = Math.cos(breadAngle), sin = Math.sin(breadAngle);
-    return {
-        x: m.centerX + pivotX + dx * cos - localY * sin,
-        y: m.floorY + dx * sin + localY * cos
-    };
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    applyBreadTransform(m);
+    const point = new DOMPoint(localX, localY).matrixTransform(ctx.getTransform());
+    ctx.restore();
+    return point;
 }
 
 function spawnCrumbs(m) {
-    const top = slicePointToCanvas(0, -m.height * 0.9, m);
-    for (let i = 0; i < 18; i++) {
+    const top = slicePointToCanvas(0, -m.height * 0.95, m);
+    for (let i = 0; i < 20; i++) {
         crumbs.push({
-            x: top.x + (Math.random() - 0.5) * 20,
-            y: m.floorY - 4,
+            x: top.x + (Math.random() - 0.5) * 24,
+            y: top.y,
+            floor: top.y + 2 + Math.random() * 10,
             vx: (Math.random() - 0.5) * 320,
-            vy: -80 - Math.random() * 260,
+            vy: -80 - Math.random() * 240,
             r: 1.5 + Math.random() * 2.5
         });
     }
 }
 
-function updateScene(dt, m) {
+function updateScene(dt) {
     const now = Date.now();
     if (gameState === 'running') {
         // Чем выше множитель, тем сильнее и чаще качается хлеб
         const growth = Math.log(Math.max(currentMultiplier, 1));
-        const amplitude = Math.min(0.025 + growth * 0.11, 0.3);
+        const amplitude = Math.min(0.025 + growth * 0.11, 0.3) * (axis === 'depth' ? 1.4 : 1);
         const speed = 2.5 + growth * 2.2;
         wobblePhase += speed * dt;
-        breadAngle = amplitude * Math.sin(wobblePhase) + 0.01 * Math.sin(now / 37);
+        tilt = amplitude * Math.sin(wobblePhase) + 0.01 * Math.sin(now / 37);
     } else if (gameState === 'crashed' && fall && !fall.settled) {
         fall.velocity += fall.dir * FALL_ACCELERATION * dt;
-        breadAngle += fall.velocity * dt;
-        if (fall.dir * breadAngle >= Math.PI / 2) {
-            breadAngle = fall.dir * Math.PI / 2;
+        tilt += fall.velocity * dt;
+        if (fall.dir * tilt >= Math.PI / 2) {
+            tilt = fall.dir * Math.PI / 2;
             if (!fall.bounced) {
                 fall.bounced = true;
                 fall.velocity = -fall.velocity * 0.22;
-                spawnCrumbs(m);
+                fall.landed = true;
             } else {
                 fall.settled = true;
                 fall.velocity = 0;
             }
         }
     } else if (gameState === 'betting' || gameState === 'waiting') {
-        breadAngle = 0;
+        tilt = 0;
     }
 
     crumbs.forEach(c => {
         c.vy += 900 * dt;
         c.x += c.vx * dt;
         c.y += c.vy * dt;
-        if (c.y > m.floorY + 2) {
-            c.y = m.floorY + 2;
+        if (c.y > c.floor) {
+            c.y = c.floor;
             c.vy = 0;
             c.vx *= 0.8;
         }
     });
 }
 
+function drawTable(m) {
+    // Столешница в перспективе: дальний край уже, ближний шире
+    const inset = canvas.width * 0.08;
+    ctx.fillStyle = '#6b4528';
+    ctx.beginPath();
+    ctx.moveTo(inset, m.tableFar);
+    ctx.lineTo(canvas.width - inset, m.tableFar);
+    ctx.lineTo(canvas.width, m.tableNear);
+    ctx.lineTo(0, m.tableNear);
+    ctx.closePath();
+    ctx.fill();
+    // Ближний торец стола
+    ctx.fillStyle = '#4a2f1b';
+    ctx.fillRect(0, m.tableNear, canvas.width, canvas.height - m.tableNear);
+    // Волокна дерева
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 5; i++) {
+        const y = m.tableFar + (m.tableNear - m.tableFar) * i / 5;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+    }
+}
+
 function drawScene(m) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawTable(m);
 
-    // Тень под хлебом
-    const shadowX = slicePointToCanvas(0, 0, m).x;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+    // Тень под хлебом (всегда на поверхности стола)
+    const center = slicePointToCanvas(0, -m.height / 2, m);
+    const lyingDepth = axis === 'depth' ? Math.abs(Math.sin(tilt)) : 0;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
     ctx.beginPath();
-    ctx.ellipse(shadowX, m.floorY + 3, m.width * 0.8, 6, 0, 0, Math.PI * 2);
+    ctx.ellipse(center.x, m.baseY + (tilt > 0 ? m.height * DEPTH_TILT * lyingDepth * 0.5 : 0) + 3,
+                m.width * 0.75, 7 + 10 * lyingDepth, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    const pivotX = breadAngle >= 0 ? m.width / 2 : -m.width / 2;
+    // Толщина ломтика видна, когда он ложится плашмя
+    if (lyingDepth > 0.05) {
+        ctx.save();
+        ctx.translate(0, 9 * lyingDepth);
+        applyBreadTransform(m);
+        slicePath(m.width, m.height);
+        ctx.fillStyle = BREAD_COLORS.crustDark;
+        ctx.fill();
+        ctx.restore();
+    }
+
     ctx.save();
-    ctx.translate(m.centerX + pivotX, m.floorY);
-    ctx.rotate(breadAngle);
-    ctx.translate(-pivotX, 0);
+    applyBreadTransform(m);
     drawSlice(m.width, m.height);
     ctx.restore();
 
-    // Стол рисуем поверх, чтобы «плечи» лежащего ломтика не проваливались сквозь него
-    ctx.fillStyle = '#5a3b22';
-    ctx.fillRect(0, m.floorY, canvas.width, canvas.height - m.floorY);
-    ctx.fillStyle = '#7a5232';
-    ctx.fillRect(0, m.floorY, canvas.width, 5);
+    if (fall && fall.landed) {
+        fall.landed = false;
+        spawnCrumbs(m);
+    }
 
     ctx.fillStyle = BREAD_COLORS.crust;
     crumbs.forEach(c => {
@@ -299,23 +362,24 @@ function drawScene(m) {
 function sceneLoop(now) {
     const dt = Math.min((now - lastFrameTime) / 1000, 0.05);
     lastFrameTime = now;
-    const m = sceneMetrics();
-    updateScene(dt, m);
-    drawScene(m);
+    updateScene(dt);
+    drawScene(sceneMetrics());
     requestAnimationFrame(sceneLoop);
 }
 
 // Хлеб заваливается в ту сторону, куда уже наклонился
 function toppleBread() {
-    const dir = Math.abs(breadAngle) > 0.01 ? Math.sign(breadAngle) : (Math.random() < 0.5 ? -1 : 1);
-    fall = { dir: dir, velocity: dir * 0.8, bounced: false, settled: false };
+    const dir = Math.abs(tilt) > 0.01 ? Math.sign(tilt) : (Math.random() < 0.5 ? -1 : 1);
+    fall = { dir: dir, velocity: dir * 0.8, bounced: false, settled: false, landed: false };
 }
 
+// Новый раунд: хлеб снова стоит, направление падения выбирается случайно
 function resetBread() {
     fall = null;
     crumbs = [];
-    breadAngle = 0;
-    wobblePhase = 0;
+    tilt = 0;
+    wobblePhase = Math.random() < 0.5 ? 0 : Math.PI;
+    axis = Math.random() < 0.5 ? 'side' : 'depth';
 }
 
 function updateUI() {
