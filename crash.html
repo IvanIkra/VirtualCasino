@@ -9,8 +9,32 @@
     <link rel="stylesheet" href="css/style.css">
     <style>
     .graph-container {
-        height: 300px;
-        background: linear-gradient(#1b2735, #0d1117);
+        height: 340px;
+        background: radial-gradient(ellipse at 50% 25%, #4a3324 0%, #20150e 55%, #120c08 100%);
+    }
+    .scene-overlay {
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+        font-size: clamp(1.4rem, 5vw, 2rem);
+        white-space: nowrap;
+        pointer-events: none;
+    }
+    .scene-timer {
+        position: absolute;
+        top: 12px;
+        left: 14px;
+        min-width: 3.2rem;
+        padding: 0.2rem 0.7rem;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.45);
+        color: #fff;
+        font-size: 1.4rem;
+        font-weight: bold;
+        text-align: center;
+        pointer-events: none;
     }
     #crash-graph {
         display: block;
@@ -37,7 +61,8 @@
 
                         <div class="graph-container position-relative rounded mb-3 overflow-hidden">
                             <canvas id="crash-graph"></canvas>
-                            <div id="betting-timer" class="position-absolute top-0 start-50 translate-middle-x mt-2 text-white fs-1" style="display: none;"></div>
+                            <div id="betting-timer" class="scene-timer" style="display: none;"></div>
+                            <div id="crash-label" class="scene-overlay text-danger fw-bold" style="display: none;">ХЛЕБ УПАЛ!</div>
                         </div>
 
                         <div class="history mb-3">
@@ -84,7 +109,9 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="js/store.js"></script>
 <script src="js/layout.js"></script>
-<script>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js';
+
 Casino.ready(() => {
 // Параметры раунда (как в games/crash.py)
 const BETTING_PHASE_MS = 10000;
@@ -96,7 +123,6 @@ const multiplierElement = document.getElementById('current-multiplier');
 const gameStatusElement = document.getElementById('game-status');
 const graphContainer = document.querySelector('.graph-container');
 const canvas = document.getElementById('crash-graph');
-const ctx = canvas.getContext('2d');
 const betAmountInput = document.getElementById('bet-amount');
 const autoCashoutInput = document.getElementById('auto-cashout');
 const placeBetButton = document.getElementById('place-bet-button');
@@ -127,121 +153,309 @@ function calculateCrashPoint() {
     }
 }
 
-// --- Сцена: ломтик хлеба стоит на ребре, качается и падает ---
+// --- 3D-сцена: ломтик хлеба стоит на ребре, качается и падает плашмя ---
 
 const FALL_ACCELERATION = 10; // рад/с² — как быстро хлеб заваливается
-const DEPTH_TILT = 0.38;      // насколько видна поверхность стола (наклон камеры)
-const BREAD_COLORS = { crust: '#b8742a', crustDark: '#8a5219', crumb: '#f3d9a4', pore: '#d9b77a' };
+const SLICE_H = 2.0;          // размеры ломтика в единицах сцены
+const SLICE_W = 1.44;
+const SLICE_T = 0.24;
+const BEVEL = 0.07;
+const EDGE_Z = SLICE_T / 2 + BEVEL; // ребро, на котором ломтик стоит и вокруг которого падает
+const GRAVITY = 9.8;
+const BREAD_Z = -0.7;  // хлеб стоит чуть дальше центра, чтобы упавший вперед ломтик помещался в кадр
 
 let tilt = 0;          // наклон вокруг нижнего ребра, рад; > 0 — вперед на зрителя, < 0 — назад
 let wobblePhase = 0;
 let fall = null;       // { dir, velocity, bounced, settled }
 let crumbs = [];
+let shake = 0;
 let lastFrameTime = performance.now();
+const crashLabel = document.getElementById('crash-label');
 
-function resizeCanvas() {
-    canvas.width = graphContainer.clientWidth;
-    canvas.height = graphContainer.clientHeight;
+// Контур ломтика (y вверх): подходит и для THREE.Shape, и для 2D-контекста холста
+function traceSlice(path, w, h) {
+    const r = w * 0.08;
+    path.moveTo(-w / 2 + r, 0);
+    path.lineTo(w / 2 - r, 0);
+    path.quadraticCurveTo(w / 2, 0, w / 2, r);
+    path.lineTo(w / 2, 0.58 * h);
+    path.bezierCurveTo(w / 2 + 0.16 * w, 0.62 * h, w / 2 + 0.18 * w, 0.93 * h, 0.22 * w, 0.98 * h);
+    path.bezierCurveTo(0.08 * w, 1.02 * h, -0.08 * w, 1.02 * h, -0.22 * w, 0.98 * h);
+    path.bezierCurveTo(-w / 2 - 0.18 * w, 0.93 * h, -w / 2 - 0.16 * w, 0.62 * h, -w / 2, 0.58 * h);
+    path.lineTo(-w / 2, r);
+    path.quadraticCurveTo(-w / 2, 0, -w / 2 + r, 0);
 }
 
-function sceneMetrics() {
-    const baseY = canvas.height - 85;
-    const height = Math.min(140, canvas.height * 0.5, canvas.width * 0.28);
-    return {
-        baseY,
-        height,
-        width: height * 0.72,
-        centerX: canvas.width / 2,
-        tableFar: baseY - height * DEPTH_TILT - 12,
-        tableNear: canvas.height - 18
+// Свой генератор случайных чисел для текстур, чтобы хлеб и стол всегда выглядели одинаково
+function makeRandom(seed) {
+    return () => {
+        seed = (seed + 0x6D2B79F5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
 }
 
-// Контур ломтика: низ на y = 0, верх на y = -h, с «плечами» сверху
-function slicePath(w, h) {
-    const r = w * 0.08;
-    ctx.beginPath();
-    ctx.moveTo(-w / 2 + r, 0);
-    ctx.lineTo(w / 2 - r, 0);
-    ctx.quadraticCurveTo(w / 2, 0, w / 2, -r);
-    ctx.lineTo(w / 2, -0.58 * h);
-    ctx.bezierCurveTo(w / 2 + 0.16 * w, -0.62 * h, w / 2 + 0.18 * w, -0.93 * h, 0.22 * w, -0.98 * h);
-    ctx.bezierCurveTo(0.08 * w, -1.02 * h, -0.08 * w, -1.02 * h, -0.22 * w, -0.98 * h);
-    ctx.bezierCurveTo(-w / 2 - 0.18 * w, -0.93 * h, -w / 2 - 0.16 * w, -0.62 * h, -w / 2, -0.58 * h);
-    ctx.lineTo(-w / 2, -r);
-    ctx.quadraticCurveTo(-w / 2, 0, -w / 2 + r, 0);
-    ctx.closePath();
-}
+// Текстура среза: корочка по краю, мякиш с порами. Координаты холста совпадают с координатами контура
+const FACE_X = SLICE_W * 0.7;
+const FACE_Y = SLICE_H * 1.05;
 
-function drawSlice(w, h) {
-    slicePath(w, h);
-    ctx.fillStyle = BREAD_COLORS.crust;
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = BREAD_COLORS.crustDark;
-    ctx.stroke();
+function makeFaceTextures() {
+    const rand = makeRandom(11);
+    const width = 512;
+    const height = Math.round(width * FACE_Y / (2 * FACE_X));
+    const color = document.createElement('canvas');
+    const bump = document.createElement('canvas');
+    color.width = bump.width = width;
+    color.height = bump.height = height;
+    const c = color.getContext('2d');
+    const b = bump.getContext('2d');
+    const toCanvas = context => context.setTransform(width / (2 * FACE_X), 0, 0, -height / FACE_Y, width / 2, height);
 
-    // Мякиш — тот же контур, уменьшенный к центру ломтика
-    ctx.save();
-    ctx.translate(0, -h * 0.5);
-    ctx.scale(0.84, 0.86);
-    ctx.translate(0, h * 0.5);
-    slicePath(w, h);
-    ctx.fillStyle = BREAD_COLORS.crumb;
-    ctx.fill();
-    ctx.restore();
+    // Корочка
+    toCanvas(c);
+    c.beginPath();
+    traceSlice(c, SLICE_W, SLICE_H);
+    c.fillStyle = '#a5621f';
+    c.fill();
 
-    // Поры
-    ctx.fillStyle = BREAD_COLORS.pore;
-    [[-0.2, 0.25, 0.035], [0.15, 0.35, 0.03], [-0.05, 0.55, 0.04], [0.22, 0.7, 0.03],
-     [-0.25, 0.72, 0.025], [0.05, 0.82, 0.03], [-0.12, 0.4, 0.02], [0.25, 0.18, 0.025]].forEach(([x, y, r]) => {
-        ctx.beginPath();
-        ctx.ellipse(x * w, -y * h, r * w * 1.3, r * w, 0, 0, Math.PI * 2);
-        ctx.fill();
+    // Мякиш — уменьшенный контур, с мягким переходом к корке
+    const inner = context => {
+        context.translate(0, SLICE_H * 0.5);
+        context.scale(0.87, 0.89);
+        context.translate(0, -SLICE_H * 0.5);
+        context.beginPath();
+        traceSlice(context, SLICE_W, SLICE_H);
+    };
+    c.save();
+    inner(c);
+    c.shadowColor = 'rgba(120, 60, 10, 0.9)';
+    c.shadowBlur = 14;
+    const gradient = c.createRadialGradient(0, SLICE_H * 0.55, 0.1, 0, SLICE_H * 0.5, SLICE_H * 0.7);
+    gradient.addColorStop(0, '#fbe9c4');
+    gradient.addColorStop(1, '#efd29a');
+    c.fillStyle = gradient;
+    c.fill();
+    c.restore();
+
+    b.fillStyle = '#808080';
+    b.fillRect(0, 0, width, height);
+
+    // Поры: темные впадины на цвете и на карте рельефа
+    c.save();
+    inner(c);
+    c.clip();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    for (let i = 0; i < 1400; i++) {
+        const x = rand() * width;
+        const y = rand() * height;
+        const rx = 0.8 + rand() * rand() * 6;
+        const ry = rx * (0.5 + rand() * 0.6);
+        const angle = rand() * Math.PI;
+        const light = rand() < 0.25;
+        c.fillStyle = light
+            ? `rgba(255, 246, 225, ${0.35 + rand() * 0.4})`
+            : `rgba(${160 + rand() * 30}, ${108 + rand() * 25}, ${52 + rand() * 20}, ${0.35 + rand() * 0.45})`;
+        c.beginPath();
+        c.ellipse(x, y, rx, ry, angle, 0, Math.PI * 2);
+        c.fill();
+        if (light) continue;
+        b.fillStyle = `rgba(20, 20, 20, ${0.4 + rand() * 0.5})`;
+        b.beginPath();
+        b.ellipse(x, y, rx, ry, angle, 0, Math.PI * 2);
+        b.fill();
+    }
+    c.restore();
+
+    const textures = [color, bump].map(source => {
+        const texture = new THREE.CanvasTexture(source);
+        // UV торцов ExtrudeGeometry — это координаты контура; переводим их в 0..1
+        texture.repeat.set(1 / (2 * FACE_X), 1 / FACE_Y);
+        texture.offset.set(0.5, 0);
+        texture.anisotropy = 4;
+        return texture;
     });
+    textures[0].colorSpace = THREE.SRGBColorSpace;
+    return textures;
 }
 
-// Применяет к контексту положение ломтика: локальные координаты ломтика -> холст
-function applyBreadTransform(m) {
-    // Поворот вокруг нижнего ребра к зрителю/от зрителя в упрощенной перспективе
-    const scaleY = Math.cos(tilt) - DEPTH_TILT * Math.sin(tilt);
-    const scaleX = 1 + 0.12 * Math.sin(tilt) * Math.abs(Math.sin(tilt));
-    ctx.translate(m.centerX, m.baseY);
-    ctx.scale(scaleX, scaleY);
+// Доски идут от зрителя вглубь (вдоль оси z), волокна — вдоль досок
+function makeWoodTexture() {
+    const rand = makeRandom(5);
+    const source = document.createElement('canvas');
+    source.width = 1024;
+    source.height = 1024;
+    const c = source.getContext('2d');
+    const planks = 6;
+    const plankWidth = source.width / planks;
+    for (let p = 0; p < planks; p++) {
+        const x0 = p * plankWidth;
+        const base = 92 + rand() * 30;
+        c.fillStyle = `rgb(${base}, ${base * 0.6}, ${base * 0.34})`;
+        c.fillRect(x0, 0, plankWidth, source.height);
+        for (let i = 0; i < 60; i++) {
+            const x = x0 + rand() * plankWidth;
+            const dark = rand() < 0.6;
+            c.strokeStyle = dark
+                ? `rgba(40, 20, 8, ${0.05 + rand() * 0.12})`
+                : `rgba(255, 210, 160, ${0.03 + rand() * 0.06})`;
+            c.lineWidth = 0.5 + rand() * 2.5;
+            const wave = 2 + rand() * 4;
+            const phase = rand() * 10;
+            c.beginPath();
+            for (let y = 0; y <= source.height; y += 32) {
+                const xx = x + Math.sin(y / 120 + phase) * wave;
+                if (y === 0) c.moveTo(xx, y); else c.lineTo(xx, y);
+            }
+            c.stroke();
+        }
+        // Сучок
+        if (rand() < 0.6) {
+            const kx = x0 + plankWidth * (0.3 + rand() * 0.4);
+            const ky = rand() * source.height;
+            for (let r = 18; r > 2; r -= 4) {
+                c.strokeStyle = `rgba(50, 25, 10, ${0.12 + (18 - r) * 0.02})`;
+                c.lineWidth = 2;
+                c.beginPath();
+                c.ellipse(kx, ky, r * 0.6, r * 1.6, 0, 0, Math.PI * 2);
+                c.stroke();
+            }
+        }
+        // Щель между досками
+        c.fillStyle = 'rgba(25, 12, 5, 0.85)';
+        c.fillRect(x0, 0, 3, source.height);
+    }
+    const texture = new THREE.CanvasTexture(source);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(2.5, 1.25);
+    texture.anisotropy = 8;
+    return texture;
 }
 
-function slicePointToCanvas(localX, localY, m) {
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    applyBreadTransform(m);
-    const point = new DOMPoint(localX, localY).matrixTransform(ctx.getTransform());
-    ctx.restore();
-    return point;
+let renderer = null;
+let scene, camera, pivot, bread;
+const crumbGeometry = new THREE.DodecahedronGeometry(1, 0);
+const crumbMaterials = [
+    new THREE.MeshStandardMaterial({ color: 0x9c5a1c, roughness: 0.9 }),
+    new THREE.MeshStandardMaterial({ color: 0xf1d7a2, roughness: 0.95 })
+];
+
+function buildScene() {
+    try {
+        renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    } catch (e) {
+        graphContainer.insertAdjacentHTML('beforeend',
+            '<div class="position-absolute top-50 start-50 translate-middle text-center">Браузер не поддерживает WebGL — анимация хлеба недоступна</div>');
+        return;
+    }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+
+    scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x140d08, 9, 17);
+    camera = new THREE.PerspectiveCamera(30, 2, 0.1, 50);
+
+    scene.add(new THREE.HemisphereLight(0xfff0d8, 0x4a2e18, 1.0));
+    const sun = new THREE.DirectionalLight(0xffe0b0, 2.4);
+    sun.position.set(3, 6, 4);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    Object.assign(sun.shadow.camera, { left: -4, right: 4, top: 4, bottom: -4, near: 1, far: 20 });
+    sun.shadow.bias = -0.0004;
+    sun.shadow.radius = 5;
+    scene.add(sun);
+    const fill = new THREE.DirectionalLight(0xfff4e6, 0.9);
+    fill.position.set(0, 2, 8);
+    scene.add(fill);
+    const rim = new THREE.DirectionalLight(0x9db8ff, 0.7);
+    rim.position.set(-4, 3, -5);
+    scene.add(rim);
+
+    const table = new THREE.Mesh(
+        new THREE.BoxGeometry(16, 0.4, 8),
+        new THREE.MeshStandardMaterial({ map: makeWoodTexture(), roughness: 0.65, metalness: 0.05 })
+    );
+    table.position.set(0, -0.2, 0.5);
+    table.receiveShadow = true;
+    scene.add(table);
+
+    const shape = new THREE.Shape();
+    traceSlice(shape, SLICE_W, SLICE_H);
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+        depth: SLICE_T,
+        bevelEnabled: true,
+        bevelThickness: BEVEL,
+        bevelSize: BEVEL * 0.8,
+        bevelSegments: 5,
+        curveSegments: 40
+    });
+    geometry.translate(0, BEVEL * 0.8, -SLICE_T / 2);
+
+    const [faceMap, faceBump] = makeFaceTextures();
+    const faceMaterial = new THREE.MeshStandardMaterial({ map: faceMap, bumpMap: faceBump, bumpScale: 3, roughness: 0.92 });
+    const crustMaterial = new THREE.MeshStandardMaterial({ color: 0x9a561a, roughness: 0.6, bumpMap: faceBump, bumpScale: 1 });
+    bread = new THREE.Mesh(geometry, [faceMaterial, crustMaterial]);
+    bread.castShadow = true;
+    bread.receiveShadow = true;
+
+    pivot = new THREE.Group();
+    pivot.add(bread);
+    scene.add(pivot);
+
+    resizeCanvas();
 }
 
-function spawnCrumbs(m) {
-    const top = slicePointToCanvas(0, -m.height * 0.95, m);
-    for (let i = 0; i < 20; i++) {
-        crumbs.push({
-            x: top.x + (Math.random() - 0.5) * 24,
-            y: top.y,
-            floor: top.y + 2 + Math.random() * 10,
-            vx: (Math.random() - 0.5) * 320,
-            vy: -80 - Math.random() * 240,
-            r: 1.5 + Math.random() * 2.5
-        });
+function resizeCanvas() {
+    if (!renderer) return;
+    const width = graphContainer.clientWidth;
+    const height = graphContainer.clientHeight;
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    // На узком экране отодвигаем камеру, чтобы хлеб помещался и стоя, и лежа
+    const distance = 7 * Math.min(Math.max(1.5 / camera.aspect, 1), 1.9);
+    camera.userData.base = new THREE.Vector3(0, distance * 0.36, distance);
+    camera.updateProjectionMatrix();
+}
+
+function placeBread() {
+    // Ломтик вращается вокруг того ребра, на которое заваливается
+    const edge = tilt >= 0 ? EDGE_Z : -EDGE_Z;
+    pivot.position.set(0, 0, BREAD_Z + edge);
+    bread.position.set(0, 0, -edge);
+    pivot.rotation.x = tilt;
+}
+
+function spawnCrumbs() {
+    const top = bread.localToWorld(new THREE.Vector3(0, SLICE_H * 0.9, 0));
+    for (let i = 0; i < 26; i++) {
+        const size = 0.02 + Math.random() * 0.04;
+        const mesh = new THREE.Mesh(crumbGeometry, crumbMaterials[i % 2]);
+        mesh.scale.setScalar(size);
+        mesh.castShadow = true;
+        mesh.position.set(top.x + (Math.random() - 0.5) * 0.8, size, top.z + (Math.random() - 0.5) * 0.3);
+        mesh.userData = {
+            velocity: new THREE.Vector3((Math.random() - 0.5) * 3, 1 + Math.random() * 2.5, (Math.random() - 0.5) * 2),
+            spin: new THREE.Vector3(Math.random() * 10, Math.random() * 10, Math.random() * 10),
+            size: size
+        };
+        scene.add(mesh);
+        crumbs.push(mesh);
     }
 }
 
 function updateScene(dt) {
-    const now = Date.now();
     if (gameState === 'running') {
         // Чем выше множитель, тем сильнее и чаще качается хлеб
         const growth = Math.log(Math.max(currentMultiplier, 1));
         const amplitude = Math.min(0.035 + growth * 0.15, 0.42);
         const speed = 2.5 + growth * 2.2;
         wobblePhase += speed * dt;
-        tilt = amplitude * Math.sin(wobblePhase) + 0.01 * Math.sin(now / 37);
+        tilt = amplitude * Math.sin(wobblePhase) + 0.01 * Math.sin(Date.now() / 37);
     } else if (gameState === 'crashed' && fall && !fall.settled) {
         fall.velocity += fall.dir * FALL_ACCELERATION * dt;
         tilt += fall.velocity * dt;
@@ -250,7 +464,9 @@ function updateScene(dt) {
             if (!fall.bounced) {
                 fall.bounced = true;
                 fall.velocity = -fall.velocity * 0.22;
-                fall.landed = true;
+                placeBread();
+                spawnCrumbs();
+                shake = 0.08;
             } else {
                 fall.settled = true;
                 fall.velocity = 0;
@@ -260,114 +476,50 @@ function updateScene(dt) {
         tilt = 0;
     }
 
-    crumbs.forEach(c => {
-        c.vy += 900 * dt;
-        c.x += c.vx * dt;
-        c.y += c.vy * dt;
-        if (c.y > c.floor) {
-            c.y = c.floor;
-            c.vy = 0;
-            c.vx *= 0.8;
+    crumbs.forEach(mesh => {
+        const data = mesh.userData;
+        data.velocity.y -= GRAVITY * dt;
+        mesh.position.addScaledVector(data.velocity, dt);
+        if (mesh.position.y < data.size) {
+            mesh.position.y = data.size;
+            data.velocity.set(data.velocity.x * 0.6, Math.abs(data.velocity.y) * 0.25, data.velocity.z * 0.6);
+            data.spin.multiplyScalar(0.5);
         }
-    });
-}
-
-function drawTable(m) {
-    // Столешница в перспективе: дальний край уже, ближний шире
-    const inset = canvas.width * 0.08;
-    ctx.fillStyle = '#6b4528';
-    ctx.beginPath();
-    ctx.moveTo(inset, m.tableFar);
-    ctx.lineTo(canvas.width - inset, m.tableFar);
-    ctx.lineTo(canvas.width, m.tableNear);
-    ctx.lineTo(0, m.tableNear);
-    ctx.closePath();
-    ctx.fill();
-    // Ближний торец стола
-    ctx.fillStyle = '#4a2f1b';
-    ctx.fillRect(0, m.tableNear, canvas.width, canvas.height - m.tableNear);
-    // Волокна дерева
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
-    ctx.lineWidth = 1;
-    for (let i = 1; i < 5; i++) {
-        const y = m.tableFar + (m.tableNear - m.tableFar) * i / 5;
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
-    }
-}
-
-function drawScene(m) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawTable(m);
-
-    // Тень под хлебом (всегда на поверхности стола)
-    const center = slicePointToCanvas(0, -m.height / 2, m);
-    const lyingDepth = Math.abs(Math.sin(tilt));
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-    ctx.beginPath();
-    ctx.ellipse(center.x, m.baseY + (tilt > 0 ? m.height * DEPTH_TILT * lyingDepth * 0.5 : 0) + 3,
-                m.width * 0.75, 7 + 10 * lyingDepth, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Толщина ломтика видна, когда он ложится плашмя
-    if (lyingDepth > 0.05) {
-        ctx.save();
-        ctx.translate(0, 9 * lyingDepth);
-        applyBreadTransform(m);
-        slicePath(m.width, m.height);
-        ctx.fillStyle = BREAD_COLORS.crustDark;
-        ctx.fill();
-        ctx.restore();
-    }
-
-    ctx.save();
-    applyBreadTransform(m);
-    drawSlice(m.width, m.height);
-    ctx.restore();
-
-    if (fall && fall.landed) {
-        fall.landed = false;
-        spawnCrumbs(m);
-    }
-
-    ctx.fillStyle = BREAD_COLORS.crust;
-    crumbs.forEach(c => {
-        ctx.beginPath();
-        ctx.arc(c.x, c.y - c.r, c.r, 0, Math.PI * 2);
-        ctx.fill();
+        mesh.rotation.x += data.spin.x * dt;
+        mesh.rotation.y += data.spin.y * dt;
+        mesh.rotation.z += data.spin.z * dt;
     });
 
-    if (gameState === 'crashed') {
-        ctx.fillStyle = '#dc3545';
-        ctx.font = 'bold 32px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        ctx.fillText('ХЛЕБ УПАЛ!', canvas.width / 2, 16);
-    }
+    shake *= Math.exp(-dt * 7);
 }
 
 function sceneLoop(now) {
     const dt = Math.min((now - lastFrameTime) / 1000, 0.05);
     lastFrameTime = now;
     updateScene(dt);
-    drawScene(sceneMetrics());
+    crashLabel.style.display = gameState === 'crashed' ? 'block' : 'none';
+    placeBread();
+    camera.position.copy(camera.userData.base);
+    camera.position.x += (Math.random() - 0.5) * shake;
+    camera.position.y += (Math.random() - 0.5) * shake;
+    camera.lookAt(0, 0.9, 0);
+    renderer.render(scene, camera);
     requestAnimationFrame(sceneLoop);
 }
 
 // Хлеб заваливается в ту сторону, куда уже наклонился
 function toppleBread() {
     const dir = Math.abs(tilt) > 0.01 ? Math.sign(tilt) : (Math.random() < 0.5 ? -1 : 1);
-    fall = { dir: dir, velocity: dir * 0.8, bounced: false, settled: false, landed: false };
+    fall = { dir: dir, velocity: dir * 0.8, bounced: false, settled: false };
 }
 
 // Новый раунд: хлеб снова стоит, куда он качнется первым — случайно
 function resetBread() {
     fall = null;
-    crumbs = [];
     tilt = 0;
     wobblePhase = Math.random() < 0.5 ? 0 : Math.PI;
+    crumbs.forEach(mesh => scene && scene.remove(mesh));
+    crumbs = [];
 }
 
 function updateUI() {
@@ -384,7 +536,7 @@ function updateUI() {
     multiplierElement.textContent = currentMultiplier.toFixed(2) + 'x';
 
     bettingTimerDiv.style.display = gameState === 'betting' ? 'block' : 'none';
-    bettingTimerDiv.textContent = Math.ceil(secondsLeft);
+    bettingTimerDiv.textContent = `⏱ ${Math.ceil(secondsLeft)}`;
 
     const hasActiveBet = bet !== null && bet.cashoutMultiplier === null;
     placeBetButton.style.display = gameState === 'running' ? 'none' : 'block';
@@ -540,9 +692,9 @@ placeBetButton.addEventListener('click', () => {
 
 cashoutButton.addEventListener('click', () => cashout(Math.floor(currentMultiplier * 100) / 100));
 
+buildScene();
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
-requestAnimationFrame(sceneLoop);
+if (renderer) requestAnimationFrame(sceneLoop);
 startBetting();
 });
 </script>
